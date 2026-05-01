@@ -91,6 +91,7 @@ class SSHProvider(SandboxAgentProviderMixin):
         log_path = f"{remote_root}/sandbox-agent.log"
         pid_path = f"{remote_root}/sandbox-agent.pid"
 
+        self._wait_for_ssh()
         self._run_remote(
             "\n".join([
                 "set -e",
@@ -239,8 +240,9 @@ done
 exit 1
 """
         resolved = self._run_remote(resolve_script, check=False)
-        if resolved.returncode == 0 and resolved.stdout.strip():
-            return resolved.stdout.strip()
+        resolved_path = _extract_last_non_empty_line(resolved.stdout)
+        if resolved.returncode == 0 and resolved_path:
+            return resolved_path
 
         install_script = "\n".join([
             "set -e",
@@ -252,13 +254,14 @@ exit 1
             resolve_script,
         ])
         installed = self._run_remote(install_script, check=False)
-        if installed.returncode != 0 or not installed.stdout.strip():
+        installed_path = _extract_last_non_empty_line(installed.stdout)
+        if installed.returncode != 0 or not installed_path:
             stderr = (installed.stderr or "").strip()
             raise RemoteBackendUnavailable(
                 "ssh provider could not install sandbox-agent on the remote "
                 f"host {self.host}. stderr: {stderr[:500]}"
             )
-        return installed.stdout.strip()
+        return installed_path
 
     def _start_agent(
         self,
@@ -409,6 +412,31 @@ exit 1
             )
         return proc
 
+    def _wait_for_ssh(self) -> None:
+        deadline = time.monotonic() + self.health_timeout
+        last_error = ""
+        while time.monotonic() < deadline:
+            proc = subprocess.run(
+                self._ssh_base_args()
+                + ["-o", "ConnectTimeout=5", self.host, "true"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0:
+                return
+
+            stderr = (proc.stderr or "").strip()
+            last_error = stderr or f"ssh exited with status {proc.returncode}"
+            if "Permission denied" in stderr:
+                break
+            time.sleep(1.0)
+
+        raise RemoteBackendUnavailable(
+            f"ssh provider could not reach {self.host} within {self.health_timeout}s: "
+            f"{last_error[:500]}"
+        )
+
 
 def _command_exists(name: str) -> bool:
     return subprocess.run(
@@ -431,3 +459,11 @@ def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _extract_last_non_empty_line(output: str) -> str:
+    for line in reversed(output.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""

@@ -94,6 +94,7 @@ class AWSProvider(SandboxAgentProviderMixin):
                 "key": self.key,
                 "port": self.ssh_port,
                 "keep_warm": self.keep_warm,
+                "health_timeout_seconds": self.health_timeout,
             }
         )
         try:
@@ -133,7 +134,12 @@ class AWSProvider(SandboxAgentProviderMixin):
     def is_alive(self, handle: SandboxHandle) -> bool:
         try:
             instance = self._instance_for_handle(handle)
-            if instance.state and getattr(instance.state, "Name", instance.state) not in {"running"}:
+            state = instance.state or {}
+            if isinstance(state, dict):
+                state_name = str(state.get("Name", "")).strip().lower()
+            else:
+                state_name = str(getattr(state, "Name", state)).strip().lower()
+            if state_name not in {"running"}:
                 return False
         except Exception:
             return False
@@ -156,6 +162,7 @@ class AWSProvider(SandboxAgentProviderMixin):
                 "key": self.key,
                 "port": meta.get("aws_ssh_port", self.ssh_port),
                 "keep_warm": _parse_bool(meta.get("aws_keep_warm", self.keep_warm)),
+                "health_timeout_seconds": self.health_timeout,
             }
         )
 
