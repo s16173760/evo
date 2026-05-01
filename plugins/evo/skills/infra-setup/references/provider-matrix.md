@@ -16,4 +16,10 @@ Notes:
 - `evo` runtime uses the provider SDK or transport listed in the second column.
 - The `evo-hq-cli[<provider>]` extras are the preferred install path when the provider SDK is missing.
 - Provider auth/setup is operator guidance. It is not the same thing as evo's runtime dependency surface.
-- Common failures are usually one of: missing SDK import, missing auth state/env var, or unreachable host/port.
+- Common failures are usually one of: missing SDK import, missing auth state/env var, unreachable host/port, or provider-specific bootstrap mismatch.
+- Incomplete provider setup usually surfaces on `evo new --remote <provider> ...`, because that is where remote allocation and bootstrap actually happen.
+- For SSH-backed VM providers, also validate the guest assumptions:
+  - the instance image has SSH enabled
+  - the SSH user matches the image
+  - the image architecture matches the selected instance type
+  - the remote host can install and run `sandbox-agent`
