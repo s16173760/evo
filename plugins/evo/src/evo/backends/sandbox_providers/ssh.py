@@ -65,6 +65,9 @@ class SSHProvider(SandboxAgentProviderMixin):
                     "ssh provider tunnel_port must be an integer when set."
                 ) from exc
         self.keep_warm = _parse_bool(config.get("keep_warm", False))
+        self.allow_stdout_success = _parse_bool(
+            config.get("allow_stdout_success", False)
+        )
         self.health_timeout = float(
             config.get("health_timeout_seconds", DEFAULT_HEALTH_TIMEOUT)
         )
@@ -405,6 +408,15 @@ exit 1
             text=True,
             check=False,
         )
+        if (
+            proc.returncode != 0
+            and self.allow_stdout_success
+            and proc.stdout.strip()
+            and not (proc.stderr or "").strip()
+        ):
+            proc = subprocess.CompletedProcess(
+                proc.args, 0, proc.stdout, proc.stderr
+            )
         if check and proc.returncode != 0:
             raise RemoteBackendUnavailable(
                 f"ssh command failed against {self.host}: "

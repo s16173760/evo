@@ -70,6 +70,8 @@ class DaytonaProvider(SandboxAgentProviderMixin):
                 "host": ssh_user_host,
                 "port": self.ssh_port,
                 "keep_warm": False,
+                "allow_stdout_success": True,
+                "health_timeout_seconds": self.health_timeout,
             }
         )
         try:
@@ -158,5 +160,7 @@ class DaytonaProvider(SandboxAgentProviderMixin):
                 "host": f"{token}@{host}",
                 "port": meta.get("daytona_ssh_port", self.ssh_port),
                 "keep_warm": False,
+                "allow_stdout_success": True,
+                "health_timeout_seconds": self.health_timeout,
             }
         )
