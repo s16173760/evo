@@ -30,15 +30,21 @@ daytona = [
 aws = [
     "boto3>=1.42.66",
 ]
-hetzner = [
-    "hcloud>=2.17.1",
+azure = [
+    "azure-identity>=1.17.1",
+    "azure-mgmt-resource>=23.1.1",
+    "azure-mgmt-network>=28.0.0",
+    "azure-mgmt-compute>=34.0.0",
 ]
 all = [
     "modal>=0.62.0",
     "e2b>=2.20.0",
     "daytona>=0.170.0",
     "boto3>=1.42.66",
-    "hcloud>=2.17.1",
+    "azure-identity>=1.17.1",
+    "azure-mgmt-resource>=23.1.1",
+    "azure-mgmt-network>=28.0.0",
+    "azure-mgmt-compute>=34.0.0",
 ]
 mcp = [
     "mcp>=1.0.0",

@@ -87,14 +87,18 @@ const REMOTE_PROVIDER_FIELDS = {
     {key: 'health_timeout_seconds', label: 'Health timeout', type: 'float', advanced: true},
     {key: 'keep_warm', label: 'Keep warm', type: 'bool', advanced: true},
   ],
-  hetzner: [
-    {key: 'token', label: 'API token', type: 'secret'},
-    {key: 'server_type', label: 'Server type', type: 'text'},
-    {key: 'image', label: 'Image', type: 'text'},
+  azure: [
+    {key: 'subscription_id', label: 'Subscription ID', type: 'text'},
+    {key: 'resource_group', label: 'Resource group', type: 'text'},
     {key: 'location', label: 'Location', type: 'text'},
-    {key: 'ssh_key_name', label: 'SSH key name', type: 'text'},
+    {key: 'vm_size', label: 'VM size', type: 'text'},
+    {key: 'image', label: 'Image', type: 'text', help: 'Publisher:Offer:Sku:Version'},
     {key: 'ssh_user', label: 'SSH user', type: 'text'},
     {key: 'key', label: 'SSH private key', type: 'secret'},
+    {key: 'ssh_public_key', label: 'SSH public key', type: 'secret', advanced: true},
+    {key: 'ssh_cidr', label: 'SSH CIDR', type: 'text', advanced: true},
+    {key: 'vnet_cidr', label: 'VNet CIDR', type: 'text', advanced: true},
+    {key: 'subnet_cidr', label: 'Subnet CIDR', type: 'text', advanced: true},
     {key: 'ssh_port', label: 'SSH port', type: 'int', advanced: true},
     {key: 'timeout_seconds', label: 'Timeout seconds', type: 'int', advanced: true},
     {key: 'health_timeout_seconds', label: 'Health timeout', type: 'float', advanced: true},
@@ -1230,7 +1234,7 @@ function renderExecutionSettings(panel, ws) {
           <div class="settings-block">
             <div class="settings-block-label">Remote provider</div>
             <select id="settings-provider-choice" class="settings-select">
-            ${['modal', 'e2b', 'ssh', 'daytona', 'aws', 'hetzner', 'manual'].map(provider => `<option value="${provider}" ${draft.providerChoice === provider ? 'selected' : ''}>${provider}</option>`).join('')}
+            ${['modal', 'e2b', 'ssh', 'daytona', 'aws', 'azure', 'manual'].map(provider => `<option value="${provider}" ${draft.providerChoice === provider ? 'selected' : ''}>${provider}</option>`).join('')}
             <option value="__custom__" ${draft.providerChoice === '__custom__' ? 'selected' : ''}>custom</option>
           </select>
           <div class="settings-help">Pick the provider to use for new remote experiments.</div>

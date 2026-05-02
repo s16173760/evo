@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -180,7 +181,7 @@ def _provider_readiness(config: dict[str, Any]) -> dict[str, Any]:
         or os.environ.get("AWS_SESSION_TOKEN")
         or os.environ.get("AWS_SECRET_ACCESS_KEY")
     )
-    hetzner_auth_present = bool(os.environ.get("HCLOUD_TOKEN")) or bool(provider_config.get("token"))
+    azure_auth_present = _azure_auth_present()
     e2b_source = (
         "workspace-config"
         if provider == "e2b" and provider_config.get("api_key")
@@ -217,13 +218,31 @@ def _provider_readiness(config: dict[str, Any]) -> dict[str, Any]:
                 else "missing"
             ),
         },
-        "hetzner": {
-            "sdk_installed": _module_available("hcloud"),
-            "auth_present": hetzner_auth_present,
+        "azure": {
+            "sdk_installed": all(
+                _module_available(name)
+                for name in (
+                    "azure.identity",
+                    "azure.mgmt.resource",
+                    "azure.mgmt.network",
+                    "azure.mgmt.compute",
+                )
+            ),
+            "auth_present": azure_auth_present,
             "auth_source": (
                 "env"
-                if os.environ.get("HCLOUD_TOKEN")
-                else ("workspace-config" if provider_config.get("token") else "missing")
+                if any(
+                    os.environ.get(name)
+                    for name in (
+                        "AZURE_CLIENT_ID",
+                        "AZURE_CLIENT_SECRET",
+                        "AZURE_TENANT_ID",
+                        "ARM_CLIENT_ID",
+                        "ARM_CLIENT_SECRET",
+                        "ARM_TENANT_ID",
+                    )
+                )
+                else ("azure-cli" if _azure_cli_logged_in() else "missing")
             ),
         },
         "ssh": {
@@ -248,6 +267,34 @@ def _clean_provider_config(data: dict[str, Any]) -> dict[str, Any]:
             continue
         cleaned[key] = value
     return cleaned
+
+
+def _azure_cli_logged_in() -> bool:
+    if shutil.which("az") is None:
+        return False
+    proc = subprocess.run(
+        ["az", "account", "show"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
+def _azure_auth_present() -> bool:
+    if any(
+        os.environ.get(name)
+        for name in (
+            "AZURE_CLIENT_ID",
+            "AZURE_CLIENT_SECRET",
+            "AZURE_TENANT_ID",
+            "ARM_CLIENT_ID",
+            "ARM_CLIENT_SECRET",
+            "ARM_TENANT_ID",
+        )
+    ):
+        return True
+    return _azure_cli_logged_in()
 
 
 def _preserve_secret_fields(

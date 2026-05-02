@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Infra Setup
 
-Use this when the user wants to change where experiments run: local worktrees, pool slots, or a remote provider such as Modal, E2B, Daytona, AWS, Hetzner, SSH, manual sandbox-agent, or a custom dotted-path provider.
+Use this when the user wants to change where experiments run: local worktrees, pool slots, or a remote provider such as Modal, E2B, Daytona, AWS, Azure, SSH, manual, or a custom dotted-path provider.
 
 ## Goals
 
@@ -25,7 +25,7 @@ Use this when the user wants to change where experiments run: local worktrees, p
 - `e2b`
 - `daytona`
 - `aws`
-- `hetzner`
+- `azure`
 - `manual`
 - `ssh:user@host[:port]`
    - another built-in provider name
@@ -68,14 +68,14 @@ Before trying to switch a workspace to a remote provider, confirm the basics:
   - `e2b`: API key + optional config
   - `daytona`: API key and API URL/target if needed
   - `aws`: creds, region, image, SSH key pair/private key, and usually network config
-  - `hetzner`: token, server type, SSH key/private key, and image/location choices
+  - `azure`: subscription, resource group, region, SSH key/private key, and VM/image choices
   - `ssh`: reachable host, working SSH user, and key/port if needed
-  - `manual`: reachable sandbox-agent URL and bearer token
+  - `manual`: reachable remote endpoint URL and bearer token
 - for SSH-backed VM providers, the guest assumptions are plausible before allocation:
   - the image enables SSH
   - the SSH user matches the image
   - the image architecture matches the selected instance type
-  - the host can install and run `sandbox-agent`
+  - the host can run evo's remote workspace runtime
 
 ## Provider notes
 

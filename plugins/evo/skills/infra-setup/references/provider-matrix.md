@@ -8,9 +8,9 @@ Use this as the compact summary. This is setup guidance, not a runtime dependenc
 | `e2b` | E2B Python SDK | If missing, install `evo-hq-cli[e2b]` (or inject `e2b` with `pipx`); then `export E2B_API_KEY=...` | `template`, `api_key`, `domain`, `root`, `timeout_seconds`, `health_timeout_seconds`, `allow_internet_access`, `secure` |
 | `daytona` | Daytona Python SDK | If missing, install `evo-hq-cli[daytona]` (or inject `daytona` with `pipx`); then `export DAYTONA_API_KEY=...` | `api_key`, `api_url`, `target`, `timeout_seconds`, `health_timeout_seconds`, `ssh_host`, `ssh_port`, `ssh_token_ttl_minutes`, `sandbox_timeout_seconds` |
 | `aws` | `boto3` | If missing, install `evo-hq-cli[aws]` (or inject `boto3` with `pipx`); then export AWS creds and region | `region`, `image_id`, `key_name`, `key`, `instance_type`, `subnet_id`, `security_group_ids`, `ssh_user`, `ssh_port`, `timeout_seconds`, `health_timeout_seconds`, `keep_warm` |
-| `hetzner` | `hcloud` | If missing, install `evo-hq-cli[hetzner]` (or inject `hcloud` with `pipx`); then `export HCLOUD_TOKEN=...` | `token`, `server_type`, `image`, `location`, `ssh_key_name`, `key`, `ssh_user`, `ssh_port`, `timeout_seconds`, `health_timeout_seconds`, `keep_warm` |
+| `azure` | Azure Python SDK (`azure-identity`, `azure-mgmt-resource`, `azure-mgmt-network`, `azure-mgmt-compute`) | If missing, install `evo-hq-cli[azure]`; then use `az login` or Azure env creds, and provide subscription/resource-group config | `subscription_id`, `resource_group`, `location`, `vm_size`, `image`, `key`, `ssh_public_key`, `ssh_user`, `ssh_cidr`, `vnet_cidr`, `subnet_cidr`, `ssh_port`, `timeout_seconds`, `health_timeout_seconds`, `keep_warm` |
 | `ssh` | local `ssh` transport | `ssh user@host` must work first; then add `-i` / `-p` if needed | `host`, `key`, `port`, `tunnel_port`, `keep_warm`, `health_timeout_seconds` |
-| `manual` | existing sandbox-agent URL/token | no provisioning; only ask for URL/token if the user explicitly wants manual mode | `base_url`, `bearer_token`, `workspace_root`, `bundle_dir` |
+| `manual` | existing remote workspace endpoint | no provisioning; only ask for URL/token if the user explicitly wants manual mode | `base_url`, `bearer_token`, `workspace_root`, `bundle_dir` |
 
 Notes:
 - `evo` runtime uses the provider SDK or transport listed in the second column.
@@ -22,4 +22,4 @@ Notes:
   - the instance image has SSH enabled
   - the SSH user matches the image
   - the image architecture matches the selected instance type
-  - the remote host can install and run `sandbox-agent`
+  - the remote host can run evo's remote workspace runtime

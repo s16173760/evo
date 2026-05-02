@@ -93,17 +93,19 @@ def _load_aws(config: dict[str, Any]) -> SandboxProvider:
     return _aws_module.AWSProvider(config)
 
 
-def _load_hetzner(config: dict[str, Any]) -> SandboxProvider:
+def _load_azure(config: dict[str, Any]) -> SandboxProvider:
     try:
-        from . import hetzner as _hetzner_module
+        from . import azure as _azure_module
     except ImportError as exc:
         raise RemoteBackendUnavailable(
-            "Hetzner provider requested but the 'hcloud' Python SDK is not installed. "
-            "Install it with: python -m pip install 'evo-hq-cli[hetzner]' "
-            "(or `pipx inject evo-hq-cli hcloud` if evo itself was installed "
+            "Azure provider requested but the Azure Python SDK is not installed. "
+            "Install it with: python -m pip install 'evo-hq-cli[azure]' "
+            "(or `pipx inject evo-hq-cli azure-identity azure-mgmt-resource "
+            "azure-mgmt-network azure-mgmt-compute` if evo itself was installed "
             "with pipx)."
         ) from exc
-    return _hetzner_module.HetznerProvider(config)
+    return _azure_module.AzureProvider(config)
+
 
 _LOADERS: dict[str, Callable[[dict[str, Any]], SandboxProvider]] = {
     "modal": _load_modal,
@@ -112,7 +114,7 @@ _LOADERS: dict[str, Callable[[dict[str, Any]], SandboxProvider]] = {
     "e2b": _load_e2b,
     "daytona": _load_daytona,
     "aws": _load_aws,
-    "hetzner": _load_hetzner,
+    "azure": _load_azure,
 }
 
 

@@ -159,7 +159,7 @@ class TestDashboardFrontierStrategy(unittest.TestCase):
             data["default_backend"]["config"]["provider_config"]["api_key"],
             "<redacted>",
         )
-        for provider in ("modal", "e2b", "daytona", "aws", "hetzner", "ssh", "manual"):
+        for provider in ("modal", "e2b", "daytona", "aws", "azure", "ssh", "manual"):
             self.assertIn(provider, data["provider_readiness"], provider)
 
         by_name = {
