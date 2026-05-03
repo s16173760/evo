@@ -99,6 +99,8 @@ evo new --parent <parent_id> -m "<your hypothesis>"
 
 Parse the JSON output to get the experiment ID and worktree path.
 
+If you only need to validate benchmark/gate wiring before a real attempt, use `evo run <exp_id> --check`. It writes check artifacts but does not commit, evaluate, or consume retry budget.
+
 ### 3. Edit the target
 
 How you edit depends on the workspace's execution backend (the `"worktree"` path returned by `evo new` tells you which case you're in):

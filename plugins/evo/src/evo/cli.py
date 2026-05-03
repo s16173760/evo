@@ -1438,6 +1438,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     root = repo_root()
     config, graph = _require_workspace(root)
     node = _read_node(root, args.exp_id)
+    if getattr(args, "check", False):
+        if not node.get("worktree"):
+            print(f"ERROR: {args.exp_id} has no worktree to check", file=sys.stderr)
+            return 1
+        from .workspace_executor import workspace_executor_for
+        from .backends import load_backend
+        backend = load_backend(root, node=node, workspace_config=config)
+        with workspace_executor_for(backend, root, node) as executor:
+            return _cmd_run_check(args, root, config, graph, node, executor)
+
     if node.get("status") not in (None, "pending", "active", "evaluated", "failed"):
         print(f"ERROR: {args.exp_id} has status '{node['status']}' -- cannot run again", file=sys.stderr)
         return 1
@@ -1465,6 +1475,172 @@ def cmd_run(args: argparse.Namespace) -> int:
             args, root, config, graph, node, backend, executor,
             max_attempts=max_attempts, evaluated_attempts=evaluated_attempts,
         )
+
+
+def _next_check_dir(root: Path, exp_id: str) -> tuple[int, Path]:
+    checks_root = experiments_dir_for(root, exp_id) / "checks"
+    checks_root.mkdir(parents=True, exist_ok=True)
+    existing = [
+        int(path.name)
+        for path in checks_root.iterdir()
+        if path.is_dir() and path.name.isdigit()
+    ]
+    check_n = (max(existing) + 1) if existing else 1
+    check_dir = checks_root / f"{check_n:03d}"
+    check_dir.mkdir(parents=True, exist_ok=False)
+    return check_n, check_dir
+
+
+def _runtime_env_for_attempt(
+    root: Path,
+    config: dict,
+    *,
+    exp_id: str,
+    attempt_label: str,
+    worktree: Path,
+    env_traces_dir: str,
+    env_result_path: str,
+) -> dict[str, str]:
+    env = resolve_runtime_env(root, config)
+    env["EVO_TRACES_DIR"] = env_traces_dir
+    env["EVO_WORKTREE"] = str(worktree)
+    env["EVO_EXPERIMENT_ID"] = exp_id
+    env["EVO_ATTEMPT"] = attempt_label
+    env["EVO_RESULT_PATH"] = env_result_path
+    return env
+
+
+def _inherited_gate_specs(config: dict, graph: dict, parent_id: str) -> tuple[list[dict], dict[str, str]]:
+    inherited_gates = collect_gates_from_path(graph, parent_id)
+    if config.get("gate"):
+        inherited_gates.insert(0, {"name": "_init_gate", "command": config["gate"]})
+
+    gate_origins: dict[str, str] = {}
+    for chain_node in path_to_node(graph, parent_id):
+        for g in chain_node.get("gates", []):
+            gate_origins.setdefault(g["name"], chain_node["id"])
+    if config.get("gate"):
+        gate_origins.setdefault("_init_gate", "config")
+    return inherited_gates, gate_origins
+
+
+def _cmd_run_check(
+    args: argparse.Namespace,
+    root: Path,
+    config: dict,
+    graph: dict,
+    node: dict,
+    executor: Any,
+) -> int:
+    check_n, check_dir = _next_check_dir(root, args.exp_id)
+    started_at = utc_now()
+    worktree = Path(node["worktree"])
+    target = node_target_path(root, config, node)
+    traces_dir = check_dir / "traces"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    benchmark_log = check_dir / "benchmark.log"
+    benchmark_err = check_dir / "benchmark_err.log"
+    result_path = check_dir / "result.json"
+    remote = executor.is_remote
+
+    if remote:
+        sandbox_traces_dir = f"{worktree}/.evo/check_traces"
+        sandbox_result_path = f"{worktree}/.evo/check_result.json"
+        run_cwd: Path | str = worktree
+        env_traces_dir = sandbox_traces_dir
+        env_result_path = sandbox_result_path
+        executor.run(["rm", "-rf", sandbox_traces_dir, sandbox_result_path], cwd=worktree)
+        executor.run(["mkdir", "-p", sandbox_traces_dir], cwd=worktree)
+    else:
+        sandbox_traces_dir = ""
+        sandbox_result_path = ""
+        run_cwd = root
+        env_traces_dir = str(traces_dir.resolve())
+        env_result_path = str(result_path.resolve())
+
+    benchmark_cmd = fill_command_template(config["benchmark"], target=target, worktree=worktree)
+    env = _runtime_env_for_attempt(
+        root,
+        config,
+        exp_id=args.exp_id,
+        attempt_label=f"check-{check_n:03d}",
+        worktree=worktree,
+        env_traces_dir=env_traces_dir,
+        env_result_path=env_result_path,
+    )
+    gate_records: list[dict] = []
+    benchmark_record: dict | None = None
+    status = "failed"
+    score: float | None = None
+    error: str | None = None
+    try:
+        bench = executor.stream(
+            ["sh", "-c", benchmark_cmd],
+            cwd=run_cwd, env=env, timeout=args.timeout,
+            stdout_path=benchmark_log, stderr_path=benchmark_err,
+            mirror_remote_dir=sandbox_traces_dir if remote else None,
+            mirror_local_dir=traces_dir if remote else None,
+        )
+        if bench.timed_out:
+            raise RuntimeError("benchmark_timeout")
+        if (bench.exit_code or 0) != 0:
+            benchmark_record = {"command": benchmark_cmd, "returncode": bench.exit_code, "result": None}
+            if remote:
+                _fetch_remote_artifacts(executor, sandbox_result_path, sandbox_traces_dir, result_path, traces_dir)
+            raise RuntimeError(f"benchmark_exit_{bench.exit_code}")
+        if remote:
+            _fetch_remote_artifacts(executor, sandbox_result_path, sandbox_traces_dir, result_path, traces_dir)
+        if not result_path.exists():
+            raise RuntimeError("missing_result_json")
+        score, parsed = load_result(result_path, bench.stdout)
+        benchmark_record = {"command": benchmark_cmd, "returncode": 0, "result": parsed}
+
+        inherited_gates, gate_origins = _inherited_gate_specs(config, graph, node["parent"])
+        gate_env = {k: v for k, v in env.items() if not k.startswith("EVO_")}
+        gate_failures: list[str] = []
+        for g in inherited_gates:
+            gate_cmd = fill_command_template(g["command"], target=target, worktree=worktree)
+            gate_log_file = check_dir / f"gate_{g['name']}.log"
+            gate_result = executor.stream(
+                ["sh", "-c", gate_cmd],
+                cwd=run_cwd, env=gate_env, timeout=args.timeout,
+                stdout_path=gate_log_file, stderr_path=gate_log_file,
+            )
+            passed = not gate_result.timed_out and (gate_result.exit_code or 0) == 0
+            record = {
+                "name": g["name"],
+                "from": gate_origins.get(g["name"], "config"),
+                "command": gate_cmd,
+                "passed": passed,
+                "returncode": gate_result.exit_code,
+            }
+            if gate_result.timed_out:
+                record["error"] = "gate_timeout"
+            gate_records.append(record)
+            if not passed:
+                gate_failures.append(g["name"])
+        if gate_failures:
+            raise RuntimeError(f"gate_failed:{','.join(gate_failures)}")
+        status = "passed"
+        print(f"CHECK_PASSED {args.exp_id} score={score} artifacts={check_dir}")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc)
+        print(f"CHECK_FAILED {args.exp_id} {error} artifacts={check_dir}")
+        return 1
+    finally:
+        payload = {
+            "experiment_id": args.exp_id,
+            "check": check_n,
+            "status": status,
+            "score": score,
+            "started_at": started_at,
+            "finished_at": utc_now(),
+            "benchmark": benchmark_record,
+            "gates": gate_records,
+            "error": error,
+        }
+        atomic_write_json(check_dir / "check.json", payload)
 
 
 def _cmd_run_impl(
@@ -1575,12 +1751,15 @@ def _cmd_run_impl(
     benchmark_cmd = fill_command_template(config["benchmark"], target=target, worktree=worktree)
     # Build env from the configured runtime sources. Values are resolved fresh
     # for every attempt and then injected into local or remote processes.
-    env = resolve_runtime_env(root, config)
-    env["EVO_TRACES_DIR"] = env_traces_dir
-    env["EVO_WORKTREE"] = str(worktree)
-    env["EVO_EXPERIMENT_ID"] = args.exp_id
-    env["EVO_ATTEMPT"] = str(attempt_n)
-    env["EVO_RESULT_PATH"] = env_result_path
+    env = _runtime_env_for_attempt(
+        root,
+        config,
+        exp_id=args.exp_id,
+        attempt_label=str(attempt_n),
+        worktree=worktree,
+        env_traces_dir=env_traces_dir,
+        env_result_path=env_result_path,
+    )
 
     # Captured before the benchmark runs so it survives crashes too.
     # Use parent commit hash rather than branch ref: branch names like
@@ -1636,16 +1815,7 @@ def _cmd_run_impl(
         gate_passed = True
         gate_failures: list[str] = []
 
-        # Collect inherited gates from the tree path (root -> parent)
-        inherited_gates = collect_gates_from_path(graph, node["parent"])
-        # Also include the legacy --gate from config as an implicit gate
-        if config.get("gate"):
-            inherited_gates.insert(0, {"name": "_init_gate", "command": config["gate"]})
-
-        gate_origins: dict[str, str] = {}
-        for chain_node in path_to_node(graph, node["parent"]):
-            for g in chain_node.get("gates", []):
-                gate_origins.setdefault(g["name"], chain_node["id"])
+        inherited_gates, gate_origins = _inherited_gate_specs(config, graph, node["parent"])
 
         # Strip EVO_* so an SDK-using gate can't clobber result.json or
         # the benchmark's task_*.json traces.
@@ -2464,6 +2634,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_p = sub.add_parser("run")
     run_p.add_argument("exp_id")
     run_p.add_argument("--timeout", type=int, default=1800)
+    run_p.add_argument(
+        "--check",
+        action="store_true",
+        help="validate benchmark/gate wiring and write check artifacts without "
+             "committing, evaluating, or consuming retry budget.",
+    )
     run_p.add_argument(
         "--i-staged-new-files",
         dest="i_staged_new_files",

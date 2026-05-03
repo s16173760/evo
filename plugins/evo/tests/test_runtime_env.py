@@ -188,3 +188,61 @@ def test_cli_config_show_and_set_basic_fields(tmp_path: Path) -> None:
         assert "runtime_env" in shown
     finally:
         shutdown_dashboard(tmp_path)
+
+
+def test_run_check_writes_artifacts_without_changing_node_status(tmp_path: Path) -> None:
+    init_repo(tmp_path)
+    write(tmp_path / "agent.py", 'STATE = "baseline"\n')
+    write(
+        tmp_path / "eval.py",
+        """from __future__ import annotations
+import json
+import os
+from pathlib import Path
+
+Path(os.environ["EVO_RESULT_PATH"]).write_text(json.dumps({"score": 0.25}), encoding="utf-8")
+Path(os.environ["EVO_TRACES_DIR"]).mkdir(parents=True, exist_ok=True)
+Path(os.environ["EVO_TRACES_DIR"], "task_0.json").write_text(
+    json.dumps({"task_id": "0", "score": 0.25}),
+    encoding="utf-8",
+)
+""",
+    )
+    write(tmp_path / "gate.py", "import sys\nsys.exit(0)\n")
+    run(["git", "add", "."], cwd=tmp_path)
+    run(["git", "commit", "-m", "fixture: check"], cwd=tmp_path)
+
+    try:
+        evo(
+            [
+                "init",
+                "--target", "agent.py",
+                "--benchmark", "python3 eval.py",
+                "--gate", "python3 gate.py",
+                "--metric", "max",
+                "--host", "generic",
+            ],
+            cwd=tmp_path,
+        )
+        evo(["new", "--parent", "root", "-m", "baseline"], cwd=tmp_path)
+        checked = evo(["run", "exp_0000", "--check"], cwd=tmp_path)
+        assert "CHECK_PASSED exp_0000 score=0.25" in checked.stdout
+
+        graph = json.loads((tmp_path / ".evo" / "run_0000" / "graph.json").read_text(encoding="utf-8"))
+        node = graph["nodes"]["exp_0000"]
+        assert node["status"] == "pending"
+        assert node["current_attempt"] == 0
+        assert node["score"] is None
+
+        check_dir = tmp_path / ".evo" / "run_0000" / "experiments" / "exp_0000" / "checks" / "001"
+        check_payload = json.loads((check_dir / "check.json").read_text(encoding="utf-8"))
+        assert check_payload["status"] == "passed"
+        assert check_payload["score"] == 0.25
+        assert (check_dir / "benchmark.log").exists()
+        assert (check_dir / "result.json").exists()
+        assert (check_dir / "traces" / "task_0.json").exists()
+
+        result = evo(["run", "exp_0000"], cwd=tmp_path)
+        assert "COMMITTED exp_0000 0.25" in result.stdout
+    finally:
+        shutdown_dashboard(tmp_path)

@@ -271,40 +271,15 @@ The wire protocol is the same either way: `task_<id>.json` written to `$EVO_TRAC
 
 ### 10c. Cheap validation run
 
-Before the full baseline, validate the toolchain with the cheapest possible end-to-end run (single task, smallest split, dry-run flag -- whatever is fastest).
-
-**Important: run this from the main repo root, not from inside the worktree.** The validation writes traces to `.evo/validate/`, which must resolve to the workspace's `.evo/` at the main repo root. If you run from the worktree, the relative path creates `<worktree>/.evo/validate/` and those artifacts get staged into the experiment commit when you run `git add` later.
-
-**Resolve `{worktree}`, `{target}`, and the validator script path yourself before running.** Evo substitutes `{worktree}` / `{target}` only inside `evo run`, not in a plain shell. The validation here is a plain shell call, so build the command with concrete absolute paths:
-
-- `WORKTREE` = the worktree path returned by `evo new`
-- `TARGET` = `$WORKTREE/<relative target path, e.g. agent/solve.py>`
-- `VALIDATOR` = `<absolute path to this skill dir>/scripts/validate_result.py` -- resolve by taking the absolute path of this `SKILL.md`'s directory and appending `scripts/validate_result.py`
+Before the full baseline, validate the toolchain with the cheapest possible end-to-end run (single task, smallest split, dry-run flag -- whatever is fastest). Run the check from the main repo root:
 
 ```bash
-# from main repo root
-WORKTREE="<...>"
-TARGET="$WORKTREE/<...>"
-VALIDATOR="<...>/scripts/validate_result.py"
-
-mkdir -p "$PWD/.evo/validate"
-ATTEMPT="$(mktemp -d "$PWD/.evo/validate/run-XXXXXX")"
-mkdir -p "$ATTEMPT/traces"
-
-EVO_TRACES_DIR="$ATTEMPT/traces" \
-EVO_RESULT_PATH="$ATTEMPT/result.json" \
-EVO_EXPERIMENT_ID=validate \
-  python3 "$WORKTREE/benchmark.py" --target "$TARGET" \
-  >"$ATTEMPT/stdout.log" 2>"$ATTEMPT/stderr.log"
-
-python3 "$VALIDATOR" "$ATTEMPT/result.json"
+evo run exp_0000 --check
 ```
 
-Adapt the benchmark invocation (interpreter, args) to whatever you stored with `evo init`. The non-negotiable part is that the resulting bash command contains no literal `{worktree}`, `{target}`, or relative-script paths -- expand all of them to absolute paths before the shell runs the line. Each invocation gets a fresh attempt subdir, so re-running on failure is safe.
+`--check` runs the configured benchmark and gates, writes artifacts under `.evo/run_*/experiments/exp_0000/checks/NNN/`, and does **not** commit, evaluate, or consume retry budget. It also uses evo's real placeholder substitution, runtime env resolution, remote workspace routing, and absolute `EVO_RESULT_PATH` / `EVO_TRACES_DIR` paths, so do not hand-roll a `mktemp` wrapper.
 
-Use absolute paths for `EVO_TRACES_DIR` and `EVO_RESULT_PATH`, as shown above. Some benchmarks legitimately `chdir` internally to import the target or load fixtures; relative evo paths break in that case and make the run look like a missing-result crash.
-
-The validator asserts `result.json` exists, is non-empty, and is a JSON object with a numeric `score`. Also verify:
+The check asserts `result.json` exists, is non-empty, and is a JSON object with a numeric `score`. Also verify:
 
 - All dependencies resolve and the command completes.
 - Traces appear in `$EVO_TRACES_DIR` (if applicable).
