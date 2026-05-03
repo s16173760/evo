@@ -86,6 +86,7 @@ evo path <id>           # root-to-node chain with scores
 evo diff <id>           # diff vs parent
 evo diff <id> <other>   # diff between any two experiments
 evo gate list <id>      # effective gates for a node (inherited from ancestors)
+evo gate check <id>     # run effective gates without benchmark or state mutation
 ```
 
 ### 2. Analyze state and do structural aggregation

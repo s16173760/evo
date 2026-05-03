@@ -22,6 +22,7 @@ PROJECT_FILE = "project.md"
 SCRATCHPAD_FILE = "scratchpad.md"
 NOTES_FILE = "notes.md"
 KEYFILE_NAME = "keyfile"
+RUNTIME_ENV_VALUES_FILE = "runtime_env_values.json"
 
 SUPPORTED_HOSTS = frozenset({
     "claude-code",
@@ -140,6 +141,10 @@ def scratchpad_path(root: Path) -> Path:
 
 def notes_path(root: Path) -> Path:
     return workspace_path(root) / NOTES_FILE
+
+
+def runtime_env_values_path(root: Path) -> Path:
+    return workspace_path(root) / RUNTIME_ENV_VALUES_FILE
 
 
 def keyfile_path(root: Path) -> Path:
@@ -332,7 +337,19 @@ def resolve_runtime_env(root: Path, config: dict[str, Any]) -> dict[str, str]:
                     resolved[key] = parsed[key]
         else:
             raise RuntimeError(f"unknown runtime dotenv mode for {raw_path}: {mode!r}")
+    values = load_json(runtime_env_values_path(root), {"variables": {}})
+    runtime_variables = values.get("variables", {}) if isinstance(values, dict) else {}
+    if isinstance(runtime_variables, dict):
+        resolved.update({str(key): str(value) for key, value in runtime_variables.items()})
     return resolved
+
+
+def _redact_env_preview(value: str) -> str:
+    if value == "":
+        return "<empty>"
+    if len(value) <= 4:
+        return "*" * len(value)
+    return f"{value[:2]}...{value[-2:]}"
 
 
 def runtime_env_summary(root: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -340,6 +357,7 @@ def runtime_env_summary(root: Path, config: dict[str, Any]) -> dict[str, Any]:
     runtime_env = dict(config.get("runtime_env") or {})
     sources = []
     key_names: set[str] = set(os.environ) if runtime_env.get("inherit_shell", True) else set()
+    dotenv_key_previews: dict[str, str] = {}
     for source in runtime_env.get("dotenv", []) or []:
         if not isinstance(source, dict):
             continue
@@ -355,18 +373,37 @@ def runtime_env_summary(root: Path, config: dict[str, Any]) -> dict[str, Any]:
             parsed = parse_dotenv(path.read_text(encoding="utf-8"))
             if entry["mode"] == "all":
                 entry["resolved_keys"] = sorted(parsed)
+                entry["key_previews"] = {
+                    key: _redact_env_preview(parsed[key])
+                    for key in sorted(parsed)
+                }
+                dotenv_key_previews.update(entry["key_previews"])
                 key_names.update(parsed)
             else:
                 allowed = [str(k) for k in source.get("keys", []) or []]
                 present = sorted(k for k in allowed if k in parsed)
                 entry["resolved_keys"] = present
+                entry["key_previews"] = {
+                    key: _redact_env_preview(parsed[key])
+                    for key in present
+                }
+                dotenv_key_previews.update(entry["key_previews"])
                 key_names.update(present)
         sources.append(entry)
+    values = load_json(runtime_env_values_path(root), {"variables": {}})
+    runtime_variables = values.get("variables", {}) if isinstance(values, dict) else {}
+    variable_previews = {
+        str(key): _redact_env_preview(str(value))
+        for key, value in sorted((runtime_variables or {}).items())
+    } if isinstance(runtime_variables, dict) else {}
+    key_names.update(variable_previews)
     return {
         "inherit_shell": runtime_env.get("inherit_shell", True),
         "dotenv": sources,
         "resolved_key_count": len(key_names),
         "resolved_keys": sorted(key_names),
+        "configured_key_previews": dict(sorted(dotenv_key_previews.items())),
+        "runtime_variable_previews": variable_previews,
     }
 
 

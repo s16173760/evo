@@ -275,9 +275,12 @@ Before the full baseline, validate the toolchain with the cheapest possible end-
 
 ```bash
 evo run exp_0000 --check
+evo gate check exp_0000
 ```
 
 `--check` runs the configured benchmark and gates, writes artifacts under `.evo/run_*/experiments/exp_0000/checks/NNN/`, and does **not** commit, evaluate, or consume retry budget. It also uses evo's real placeholder substitution, runtime env resolution, remote workspace routing, and absolute `EVO_RESULT_PATH` / `EVO_TRACES_DIR` paths, so do not hand-roll a `mktemp` wrapper.
+
+Use `evo gate check <exp_id>` when only gate wiring changed or when you need to validate inherited gates without running the benchmark. It writes a `gate_check.json` artifact under the same checks directory and also does not mutate experiment state.
 
 The check asserts `result.json` exists, is non-empty, and is a JSON object with a numeric `score`. Also verify:
 
@@ -365,6 +368,7 @@ evo traces <id> <task>              # per-task trace
 evo annotate <id> <task> "analysis" # record failure analysis
 evo scratchpad                      # full state: tree, best path, frontier, annotations, diffs, gates
 evo gate list <id>                  # effective gates at a node (inherited)
+evo gate check <id>                 # run effective gates without benchmark or state mutation
 ```
 
 ## Rules

@@ -16,10 +16,12 @@ from evo.backends import backend_state_key
 from evo.backends import pool_state, remote_state
 from evo.core import (
     atomic_write_json,
+    experiments_dir_for,
     graph_path,
     init_workspace,
     load_config,
     load_graph,
+    runtime_env_values_path,
     save_config,
     set_host,
 )
@@ -154,6 +156,8 @@ class TestDashboardFrontierStrategy(unittest.TestCase):
         data = res.get_json()
         self.assertEqual(data["host"], "codex")
         self.assertEqual(data["commit_strategy"], "tracked-only")
+        self.assertIn("runtime_env", data)
+        self.assertTrue(data["runtime_env"]["inherit_shell"])
         self.assertEqual(data["default_backend"]["name"], "remote")
         self.assertEqual(
             data["default_backend"]["config"]["provider_config"]["api_key"],
@@ -179,6 +183,116 @@ class TestDashboardFrontierStrategy(unittest.TestCase):
         self.assertEqual(pool_entry["runtime"]["slot_count"], 2)
         self.assertEqual(pool_entry["runtime"]["leased_count"], 1)
         self.assertEqual(pool_entry["node_ids"], ["exp_0001"])
+
+    def test_node_endpoint_reports_latest_check_summary(self):
+        graph = load_graph(self.root)
+        graph["next_id"] = 1
+        graph["nodes"]["root"]["children"] = ["exp_0000"]
+        graph["nodes"]["exp_0000"] = {
+            "id": "exp_0000",
+            "parent": "root",
+            "children": [],
+            "status": "pending",
+            "score": None,
+            "hypothesis": "needs check",
+            "created_at": "2026-04-30T00:00:00+00:00",
+            "eval_epoch": 1,
+            "branch": "evo/run_0000/exp_0000",
+            "commit": None,
+            "worktree": "/tmp/exp_0000",
+            "benchmark_result": None,
+            "gate_result": None,
+            "gates": [],
+        }
+        atomic_write_json(graph_path(self.root), graph)
+        check_dir = experiments_dir_for(self.root, "exp_0000") / "checks" / "001"
+        (check_dir / "traces").mkdir(parents=True, exist_ok=True)
+        (check_dir / "traces" / "task_0.json").write_text("{}", encoding="utf-8")
+        atomic_write_json(
+            check_dir / "check.json",
+            {
+                "experiment_id": "exp_0000",
+                "check": 1,
+                "status": "passed",
+                "score": 0.5,
+                "finished_at": "2026-04-30T00:01:00+00:00",
+            },
+        )
+
+        res = self.client.get("/api/node/exp_0000")
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["checks"]["count"], 1)
+        self.assertEqual(data["checks"]["latest"]["status"], "passed")
+        self.assertEqual(data["checks"]["latest"]["kind"], "run")
+        self.assertEqual(data["checks"]["latest"]["trace_count"], 1)
+        self.assertEqual(data["checks"]["latest"]["artifact_path"], "checks/001")
+
+        gate_check_dir = experiments_dir_for(self.root, "exp_0000") / "checks" / "002"
+        (gate_check_dir / "gates").mkdir(parents=True, exist_ok=True)
+        (gate_check_dir / "gates" / "smoke.log").write_text("ok", encoding="utf-8")
+        atomic_write_json(
+            gate_check_dir / "gate_check.json",
+            {
+                "experiment_id": "exp_0000",
+                "check": 2,
+                "status": "passed",
+                "gates": [{"name": "smoke", "returncode": 0}],
+                "finished_at": "2026-04-30T00:02:00+00:00",
+            },
+        )
+
+        data = self.client.get("/api/node/exp_0000").get_json()
+        self.assertEqual(data["checks"]["count"], 2)
+        self.assertEqual(data["checks"]["latest"]["status"], "passed")
+        self.assertEqual(data["checks"]["latest"]["kind"], "gate")
+        self.assertEqual(data["checks"]["latest"]["artifact_path"], "checks/002")
+
+    def test_runtime_env_settings_post_updates_config_without_values(self):
+        (self.root / ".env").write_text("TOKEN=super-secret\nOTHER=value\n", encoding="utf-8")
+        res = self.client.post(
+            "/api/workspace/runtime-env",
+            json={
+                "inherit_shell": False,
+                "dotenv": [
+                    {"path": ".env", "mode": "allow", "keys": ["TOKEN"]},
+                ],
+            },
+        )
+        self.assertEqual(res.status_code, 200, res.get_json())
+        cfg = load_config(self.root)
+        self.assertEqual(cfg["runtime_env"]["inherit_shell"], False)
+        self.assertEqual(cfg["runtime_env"]["dotenv"], [{"path": ".env", "mode": "allow", "keys": ["TOKEN"]}])
+        self.assertNotIn("super-secret", str(cfg))
+
+        payload = res.get_json()["runtime_env"]
+        self.assertEqual(payload["configured_key_previews"], {"TOKEN": "su...et"})
+        self.assertNotIn("super-secret", str(payload))
+
+    def test_runtime_variables_post_stores_values_outside_config_and_redacts(self):
+        res = self.client.post(
+            "/api/workspace/runtime-variables",
+            json={
+                "variables": [
+                    {"key": "TOKEN", "value": "dashboard-secret"},
+                ],
+            },
+        )
+        self.assertEqual(res.status_code, 200, res.get_json())
+        cfg = load_config(self.root)
+        self.assertNotIn("dashboard-secret", str(cfg))
+        self.assertIn("dashboard-secret", runtime_env_values_path(self.root).read_text(encoding="utf-8"))
+
+        payload = res.get_json()["runtime_env"]
+        self.assertEqual(payload["runtime_variable_previews"], {"TOKEN": "da...et"})
+        self.assertNotIn("dashboard-secret", str(payload))
+
+        res = self.client.post(
+            "/api/workspace/runtime-variables",
+            json={"delete_keys": ["TOKEN"]},
+        )
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["runtime_env"]["runtime_variable_previews"], {})
 
     def test_execution_settings_post_accepts_modal_gpu_and_pool_size(self):
         res = self.client.post(

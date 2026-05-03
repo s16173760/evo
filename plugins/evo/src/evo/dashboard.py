@@ -27,6 +27,8 @@ from .core import (
     load_graph,
     notes_path,
     repo_root,
+    runtime_env_summary,
+    runtime_env_values_path,
     save_config,
     scratchpad_path,
 )
@@ -81,7 +83,35 @@ def _public_node(
     if backend_name == "remote":
         resolved["provider"] = backend_config.get("provider")
     public["resolved_backend"] = resolved
+    public["checks"] = _checks_summary(root, node.get("id", ""))
     return public
+
+
+def _checks_summary(root: Path, exp_id: str) -> dict[str, Any]:
+    checks_root = experiments_dir_for(root, exp_id) / "checks"
+    if not checks_root.exists():
+        return {"count": 0, "latest": None}
+    checks = []
+    for path in sorted(checks_root.iterdir()):
+        if not path.is_dir() or not path.name.isdigit():
+            continue
+        check_path = path / "check.json"
+        gate_check_path = path / "gate_check.json"
+        payload: dict[str, Any] = {"check": int(path.name), "status": "unknown", "kind": "unknown"}
+        source_path = check_path if check_path.exists() else gate_check_path if gate_check_path.exists() else None
+        if source_path is not None:
+            try:
+                payload.update(json.loads(source_path.read_text(encoding="utf-8")))
+                if payload.get("kind") == "unknown":
+                    payload["kind"] = "gate" if source_path == gate_check_path else "run"
+            except Exception:
+                payload["status"] = "unreadable"
+        payload["artifact_path"] = f"checks/{path.name}"
+        payload["trace_count"] = len(list((path / "traces").glob("*.json"))) if (path / "traces").exists() else 0
+        payload["has_benchmark_log"] = (path / "benchmark.log").exists()
+        checks.append(payload)
+    latest = checks[-1] if checks else None
+    return {"count": len(checks), "latest": latest}
 
 
 def _pool_runtime_summary(root: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -409,6 +439,75 @@ def _validate_and_save_execution_settings(root: Path, body: dict[str, Any]) -> d
     return _workspace_summary(root)
 
 
+def _normalize_runtime_env_settings(body: dict[str, Any]) -> dict[str, Any]:
+    inherit_shell = bool(body.get("inherit_shell", True))
+    sources = []
+    for raw in body.get("dotenv", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("path", "")).strip()
+        if not path:
+            continue
+        mode = str(raw.get("mode", "all")).strip()
+        if mode not in {"all", "allow"}:
+            raise ValueError("runtime env source mode must be 'all' or 'allow'")
+        entry: dict[str, Any] = {"path": path, "mode": mode}
+        if mode == "allow":
+            keys_raw = raw.get("keys", [])
+            if isinstance(keys_raw, str):
+                keys = [item.strip() for item in keys_raw.split(",") if item.strip()]
+            elif isinstance(keys_raw, list):
+                keys = [str(item).strip() for item in keys_raw if str(item).strip()]
+            else:
+                raise ValueError("runtime env allow keys must be a list or comma-separated string")
+            if not keys:
+                raise ValueError("runtime env allow mode requires at least one key")
+            entry["keys"] = keys
+        sources.append(entry)
+    return {"inherit_shell": inherit_shell, "dotenv": sources}
+
+
+def _validate_and_save_runtime_env_settings(root: Path, body: dict[str, Any]) -> dict[str, Any]:
+    runtime_env = _normalize_runtime_env_settings(body)
+    config = load_config(root)
+    config["runtime_env"] = runtime_env
+    save_config(root, config)
+    return _workspace_summary(root)
+
+
+def _normalize_runtime_variables(body: dict[str, Any]) -> dict[str, str]:
+    variables: dict[str, str] = {}
+    for raw in body.get("variables", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        key = str(raw.get("key", "")).strip()
+        if not key:
+            continue
+        if not key.replace("_", "A").isalnum() or key[0].isdigit():
+            raise ValueError(f"invalid environment variable key: {key}")
+        variables[key] = str(raw.get("value", ""))
+    return variables
+
+
+def _validate_and_save_runtime_variables(root: Path, body: dict[str, Any]) -> dict[str, Any]:
+    from .core import atomic_write_json
+    existing = {}
+    if runtime_env_values_path(root).exists():
+        try:
+            existing_payload = json.loads(runtime_env_values_path(root).read_text(encoding="utf-8"))
+            existing = dict(existing_payload.get("variables", {}) or {})
+        except Exception:
+            existing = {}
+    variables = {} if body.get("replace") else existing
+    for key in body.get("delete_keys", []) or []:
+        variables.pop(str(key), None)
+    variables.update(_normalize_runtime_variables(body))
+    atomic_payload = {"variables": variables}
+
+    atomic_write_json(runtime_env_values_path(root), atomic_payload)
+    return _workspace_summary(root)
+
+
 def _workspace_summary(root: Path) -> dict[str, Any]:
     from .backends import backend_spec_for_node, backend_spec_from_config
 
@@ -480,6 +579,7 @@ def _workspace_summary(root: Path) -> dict[str, Any]:
         "host": host,
         "commit_strategy": config.get("commit_strategy", "all"),
         "frontier_strategy": config.get("frontier_strategy"),
+        "runtime_env": runtime_env_summary(root, config),
         "keyfile_present": (root / ".evo" / "keyfile").exists(),
         "provider_readiness": _provider_readiness(config),
         "default_backend": {
@@ -494,6 +594,14 @@ def _workspace_summary(root: Path) -> dict[str, Any]:
 def create_app(root: Path | None = None) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.config["EVO_ROOT"] = str(root or repo_root())
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
+    @app.after_request
+    def no_cache(response):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
     def _root() -> Path:
         return Path(app.config["EVO_ROOT"])
@@ -579,6 +687,24 @@ def create_app(root: Path | None = None) -> Flask:
         body = request.get_json(silent=True) or {}
         try:
             summary = _validate_and_save_execution_settings(_root(), body)
+        except (ValueError, RuntimeError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(summary)
+
+    @app.post("/api/workspace/runtime-env")
+    def workspace_runtime_env():
+        body = request.get_json(silent=True) or {}
+        try:
+            summary = _validate_and_save_runtime_env_settings(_root(), body)
+        except (ValueError, RuntimeError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(summary)
+
+    @app.post("/api/workspace/runtime-variables")
+    def workspace_runtime_variables():
+        body = request.get_json(silent=True) or {}
+        try:
+            summary = _validate_and_save_runtime_variables(_root(), body)
         except (ValueError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify(summary)

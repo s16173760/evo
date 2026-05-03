@@ -78,6 +78,17 @@ def test_resolve_runtime_env_overlays_dotenv_over_shell(tmp_path: Path, monkeypa
     assert "OTHER" not in resolved
 
 
+def test_resolve_runtime_env_overlays_dashboard_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TOKEN", "shell")
+    write(tmp_path / ".evo" / "run_0000" / "runtime_env_values.json", '{"variables":{"TOKEN":"dashboard"}}')
+    config = {"runtime_env": {"inherit_shell": True, "dotenv": []}}
+    from evo.core import _save_meta
+    _save_meta(tmp_path, {"active": "run_0000", "next_run": 1})
+
+    resolved = resolve_runtime_env(tmp_path, config)
+    assert resolved["TOKEN"] == "dashboard"
+
+
 def test_runtime_env_summary_redacts_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TOKEN", "shell-secret")
     write(tmp_path / ".env", "TOKEN=dotenv-secret\n")
@@ -92,6 +103,8 @@ def test_runtime_env_summary_redacts_values(tmp_path: Path, monkeypatch: pytest.
     assert "TOKEN" in encoded
     assert "dotenv-secret" not in encoded
     assert "shell-secret" not in encoded
+    assert summary["configured_key_previews"] == {"TOKEN": "do...et"}
+    assert summary["dotenv"][0]["key_previews"] == {"TOKEN": "do...et"}
 
 
 def test_missing_runtime_env_file_fails_clearly(tmp_path: Path) -> None:
@@ -244,5 +257,52 @@ Path(os.environ["EVO_TRACES_DIR"], "task_0.json").write_text(
 
         result = evo(["run", "exp_0000"], cwd=tmp_path)
         assert "COMMITTED exp_0000 0.25" in result.stdout
+    finally:
+        shutdown_dashboard(tmp_path)
+
+
+def test_gate_check_runs_gates_without_changing_node_status(tmp_path: Path) -> None:
+    init_repo(tmp_path)
+    write(tmp_path / "agent.py", 'STATE = "baseline"\n')
+    write(tmp_path / "eval.py", 'print({"score": 0.0})\n')
+    write(
+        tmp_path / "gate.py",
+        """from __future__ import annotations
+import argparse
+from pathlib import Path
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--agent", required=True)
+args = parser.parse_args()
+sys.exit(0 if Path(args.agent).exists() else 1)
+""",
+    )
+    run(["git", "add", "."], cwd=tmp_path)
+    run(["git", "commit", "-m", "fixture: gate check"], cwd=tmp_path)
+
+    try:
+        evo(
+            [
+                "init",
+                "--target", "agent.py",
+                "--benchmark", "python3 eval.py",
+                "--metric", "max",
+                "--host", "generic",
+            ],
+            cwd=tmp_path,
+        )
+        evo(["gate", "add", "root", "--name", "exists", "--command", "python3 gate.py --agent {target}"], cwd=tmp_path)
+        evo(["new", "--parent", "root", "-m", "baseline"], cwd=tmp_path)
+        checked = evo(["gate", "check", "exp_0000"], cwd=tmp_path)
+        assert "GATE_CHECK_PASSED exp_0000 1 gates" in checked.stdout
+
+        graph = json.loads((tmp_path / ".evo" / "run_0000" / "graph.json").read_text(encoding="utf-8"))
+        assert graph["nodes"]["exp_0000"]["status"] == "pending"
+        check_dir = tmp_path / ".evo" / "run_0000" / "experiments" / "exp_0000" / "checks" / "001"
+        payload = json.loads((check_dir / "gate_check.json").read_text(encoding="utf-8"))
+        assert payload["status"] == "passed"
+        assert payload["gates"][0]["name"] == "exists"
+        assert (check_dir / "gates" / "exists.log").exists()
     finally:
         shutdown_dashboard(tmp_path)

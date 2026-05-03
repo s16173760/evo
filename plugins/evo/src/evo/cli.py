@@ -2430,7 +2430,7 @@ def cmd_infra(args: argparse.Namespace) -> int:
 
 def cmd_gate(args: argparse.Namespace) -> int:
     root = repo_root()
-    _config, graph = _require_workspace(root)
+    config, graph = _require_workspace(root)
 
     if args.gate_action == "add":
         entry = add_gate(root, args.exp_id, args.name, args.command)
@@ -2461,7 +2461,100 @@ def cmd_gate(args: argparse.Namespace) -> int:
         print(json.dumps(output, indent=2))
         return 0
 
+    if args.gate_action == "check":
+        return _cmd_gate_check(args, root, config, graph)
+
     return 1
+
+
+def _cmd_gate_check(args: argparse.Namespace, root: Path, config: dict, graph: dict) -> int:
+    node = _read_node(root, args.exp_id)
+    if not node.get("worktree"):
+        print(f"ERROR: {args.exp_id} has no worktree to check gates against", file=sys.stderr)
+        return 1
+
+    from .workspace_executor import workspace_executor_for
+    from .backends import load_backend
+
+    backend = load_backend(root, node=node, workspace_config=config)
+    with workspace_executor_for(backend, root, node) as executor:
+        return _cmd_gate_check_impl(args, root, config, graph, node, executor)
+
+
+def _cmd_gate_check_impl(
+    args: argparse.Namespace,
+    root: Path,
+    config: dict,
+    graph: dict,
+    node: dict,
+    executor: Any,
+) -> int:
+    started_at = utc_now()
+    worktree = Path(node["worktree"])
+    target = node_target_path(root, config, node)
+    check_n, check_dir = _next_check_dir(root, args.exp_id)
+    gates_dir = check_dir / "gates"
+    gates_dir.mkdir(parents=True, exist_ok=True)
+    remote = executor.is_remote
+    run_cwd: Path | str = worktree if remote else root
+    env = resolve_runtime_env(root, config)
+    gate_records: list[dict] = []
+    inherited_gates, gate_origins = _inherited_gate_specs(config, graph, args.exp_id)
+    if not inherited_gates:
+        payload = {
+            "experiment_id": args.exp_id,
+            "check": check_n,
+            "status": "passed",
+            "kind": "gate",
+            "started_at": started_at,
+            "finished_at": utc_now(),
+            "gates": [],
+            "error": None,
+        }
+        atomic_write_json(check_dir / "gate_check.json", payload)
+        print(f"GATE_CHECK_PASSED {args.exp_id} no gates artifacts={check_dir}")
+        return 0
+
+    failures: list[str] = []
+    for g in inherited_gates:
+        gate_cmd = fill_command_template(g["command"], target=target, worktree=worktree)
+        log_file = gates_dir / f"{g['name']}.log"
+        result = executor.stream(
+            ["sh", "-c", gate_cmd],
+            cwd=run_cwd, env=env, timeout=args.timeout,
+            stdout_path=log_file, stderr_path=log_file,
+        )
+        passed = not result.timed_out and (result.exit_code or 0) == 0
+        record = {
+            "name": g["name"],
+            "from": gate_origins.get(g["name"], "unknown"),
+            "command": gate_cmd,
+            "passed": passed,
+            "returncode": result.exit_code,
+        }
+        if result.timed_out:
+            record["error"] = "gate_timeout"
+        gate_records.append(record)
+        if not passed:
+            failures.append(g["name"])
+
+    status = "failed" if failures else "passed"
+    payload = {
+        "experiment_id": args.exp_id,
+        "check": check_n,
+        "status": status,
+        "kind": "gate",
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "gates": gate_records,
+        "error": f"gate_failed:{','.join(failures)}" if failures else None,
+    }
+    atomic_write_json(check_dir / "gate_check.json", payload)
+    if failures:
+        print(f"GATE_CHECK_FAILED {args.exp_id} {' '.join(failures)} artifacts={check_dir}")
+        return 1
+    print(f"GATE_CHECK_PASSED {args.exp_id} {len(gate_records)} gates artifacts={check_dir}")
+    return 0
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
@@ -2840,6 +2933,10 @@ def build_parser() -> argparse.ArgumentParser:
     gate_remove_p.add_argument("exp_id")
     gate_remove_p.add_argument("--name", required=True)
     gate_remove_p.set_defaults(func=cmd_gate)
+    gate_check_p = gate_sub.add_parser("check")
+    gate_check_p.add_argument("exp_id")
+    gate_check_p.add_argument("--timeout", type=int, default=1800)
+    gate_check_p.set_defaults(func=cmd_gate)
 
     dashboard_p = sub.add_parser("dashboard")
     dashboard_p.add_argument("--port", type=int, default=8080)

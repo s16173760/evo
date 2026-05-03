@@ -48,6 +48,7 @@ evo diff <id> <other>   # diff between any two experiments
 evo annotations         # all annotations (filterable with --task/--exp)
 evo get <id>            # full experiment detail
 evo gate list <id>      # effective gates for a node (inherited from ancestors)
+evo gate check <id>     # run effective gates without benchmark or state mutation
 evo gate add <id> --name <name> --command "<command>"  # add a gate
 ```
 

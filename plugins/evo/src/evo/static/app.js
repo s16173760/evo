@@ -798,6 +798,19 @@ async function openDrawer(expId) {
     </div>`;
   }
 
+  if (node.checks?.latest) {
+    const check = node.checks.latest;
+    const ok = check.status === 'passed';
+    html += `<div class="drawer-section">
+      <span class="drawer-section-title">Latest Run Check</span>
+      <div class="drawer-meta-row"><span class="drawer-meta-key">Status</span><span class="drawer-meta-val" style="color:${ok ? 'var(--green)' : 'var(--red)'}">${esc(check.status || 'unknown')}</span></div>
+      <div class="drawer-meta-row"><span class="drawer-meta-key">Score</span><span class="drawer-meta-val mono">${check.score != null ? Number(check.score).toFixed(2) : '--'}</span></div>
+      <div class="drawer-meta-row"><span class="drawer-meta-key">Traces</span><span class="drawer-meta-val mono">${check.trace_count || 0}</span></div>
+      <div class="drawer-meta-row"><span class="drawer-meta-key">Artifacts</span><span class="drawer-meta-val mono">${esc(check.artifact_path || '--')}</span></div>
+      ${check.error ? `<div class="failure-box"><span class="failure-box-title">Failure: ${esc(check.error)}</span></div>` : ''}
+    </div>`;
+  }
+
   // Hypothesis
   if (node.hypothesis) {
     html += `<div class="drawer-section">
@@ -1094,6 +1107,10 @@ function renderSettings(body, ws, frontierMeta) {
           <span class="settings-nav-title">Execution</span>
           <span class="settings-nav-sub">provider + runtime</span>
         </button>
+        <button class="settings-nav-item ${state.settingsSection === 'runtime' ? 'selected' : ''}" data-section="runtime" type="button">
+          <span class="settings-nav-title">Runtime</span>
+          <span class="settings-nav-sub">env + checks</span>
+        </button>
         <button class="settings-nav-item ${state.settingsSection === 'frontier' ? 'selected' : ''}" data-section="frontier" type="button">
           <span class="settings-nav-title">Frontier</span>
           <span class="settings-nav-sub">branch strategy</span>
@@ -1113,6 +1130,8 @@ function renderSettings(body, ws, frontierMeta) {
     renderProjectSettings(panel, ws);
   } else if (state.settingsSection === 'execution') {
     renderExecutionSettings(panel, ws);
+  } else if (state.settingsSection === 'runtime') {
+    renderRuntimeSettings(panel, ws);
   } else {
     renderFrontierSettings(panel, frontierMeta);
   }
@@ -1145,6 +1164,378 @@ function renderProjectSettings(panel, ws) {
     <div class="settings-block">
       <div class="settings-block-label">Default execution</div>
       <div class="settings-inline mono">${esc(backendLabel(ws.default_backend))}</div>
+    </div>
+  `;
+}
+
+function renderRuntimeSettings(panel, ws) {
+  const runtimeEnv = ws.runtime_env || {};
+  const sources = runtimeEnv.dotenv || [];
+  const configuredKeyPreviews = runtimeEnv.configured_key_previews || {};
+  const runtimeVariablePreviews = runtimeEnv.runtime_variable_previews || {};
+  const experiments = getExperiments();
+  const checked = experiments.filter(n => n.checks?.latest);
+  const latestChecks = checked
+    .sort((a, b) => ((b.checks.latest?.finished_at || '').localeCompare(a.checks.latest?.finished_at || '')))
+    .slice(0, 8);
+  const inheritedCount = Math.max(0, (runtimeEnv.resolved_key_count ?? 0) - Object.keys(configuredKeyPreviews).length - Object.keys(runtimeVariablePreviews).length);
+  const draft = {
+    inheritShell: !!runtimeEnv.inherit_shell,
+    sources: sources.map(source => ({
+      path: source.path || '',
+      mode: source.mode || 'all',
+      keys: (source.keys || []).join(', '),
+    })),
+  };
+
+  panel.innerHTML = `
+    <div class="settings-hero">
+      <div>
+        <div class="settings-section-title">Runtime</div>
+        <div class="settings-section-sub">environment passed to benchmark and gate processes</div>
+      </div>
+      <div class="settings-hero-badge mono">${draft.inheritShell ? 'shell + dotenv' : 'dotenv only'}</div>
+    </div>
+    <div class="settings-rows">
+      <div class="settings-row"><span>Shell process env</span><strong>${draft.inheritShell ? `inherited · ${inheritedCount} keys` : 'off'}</strong></div>
+      <div class="settings-row"><span>Dashboard variables</span><strong>${Object.keys(runtimeVariablePreviews).length}</strong></div>
+      <div class="settings-row"><span>File sources</span><strong>${sources.length}</strong></div>
+    </div>
+    <div id="runtime-env-form"></div>
+    <div class="settings-block">
+      <div class="settings-block-label">Recent run checks</div>
+      ${latestChecks.length ? latestChecks.map(renderCheckSummaryRow).join('') : '<div class="config-runtime-empty">No check runs yet. Use `evo run <exp_id> --check` to validate wiring without committing.</div>'}
+    </div>
+  `;
+
+  const formHost = panel.querySelector('#runtime-env-form');
+
+  function renderRuntimeForm() {
+    formHost.innerHTML = `
+      <div class="settings-block">
+        <div class="settings-block-label">Variables</div>
+        <label class="settings-field checkbox runtime-toggle-row">
+          <span>
+            <strong>Inherit shell process env</strong>
+            <small>Pass variables visible to the evo process, such as PATH and provider/API keys already exported in the shell.</small>
+          </span>
+          <input id="runtime-inherit-shell" type="checkbox" ${draft.inheritShell ? 'checked' : ''}>
+        </label>
+        <div class="runtime-action-row">
+          <button id="runtime-add-variable" class="btn-primary" type="button">Add variable</button>
+          <button id="runtime-import-env" class="btn-ghost compact" type="button">Import .env</button>
+        </div>
+      </div>
+      <div class="settings-block">
+        <div class="settings-block-label">Dashboard variables</div>
+        ${Object.keys(runtimeVariablePreviews).length ? renderRuntimeVariableGrid(runtimeVariablePreviews) : '<div class="config-runtime-empty">No dashboard variables yet. Add variables one-by-one or import a .env file.</div>'}
+      </div>
+      ${sources.length ? `<div class="settings-block">
+        <div class="settings-block-label">File sources</div>
+        ${sources.map(renderRuntimeEnvSource).join('')}
+      </div>` : ''}
+      ${Object.keys(configuredKeyPreviews).length ? `<div class="settings-block">
+        <div class="settings-block-label">Keys from file sources</div>
+        ${renderRuntimeKeyGrid(configuredKeyPreviews)}
+      </div>` : ''}
+      <div class="settings-actions">
+        <span id="runtime-env-status" class="strategy-status"></span>
+        <span class="spacer"></span>
+        <button id="runtime-env-save" class="btn-primary" type="button">Save runtime env</button>
+      </div>
+    `;
+
+    const inheritInput = formHost.querySelector('#runtime-inherit-shell');
+    inheritInput.addEventListener('change', () => {
+      draft.inheritShell = inheritInput.checked;
+    });
+    formHost.querySelectorAll('[data-runtime-remove]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        collectRuntimeDraft();
+        draft.sources.splice(Number(btn.dataset.runtimeRemove), 1);
+        renderRuntimeForm();
+      });
+    });
+    formHost.querySelectorAll('[data-runtime-mode]').forEach((select) => {
+      select.addEventListener('change', () => {
+        collectRuntimeDraft();
+        renderRuntimeForm();
+      });
+    });
+    formHost.querySelector('#runtime-env-save').addEventListener('click', async () => {
+      collectRuntimeDraft();
+      await saveRuntimeEnvSettings(draft, formHost.querySelector('#runtime-env-status'));
+    });
+    formHost.querySelector('#runtime-add-variable').addEventListener('click', () => {
+      openRuntimeVariableModal();
+    });
+    formHost.querySelector('#runtime-import-env').addEventListener('click', () => {
+      openRuntimeImportModal();
+    });
+  }
+
+  function collectRuntimeDraft() {
+    const inheritInput = formHost.querySelector('#runtime-inherit-shell');
+    if (inheritInput) draft.inheritShell = inheritInput.checked;
+    draft.sources = Array.from(formHost.querySelectorAll('[data-runtime-source]')).map((row) => ({
+      path: row.querySelector('[data-runtime-path]').value.trim(),
+      mode: row.querySelector('[data-runtime-mode]').value,
+      keys: row.querySelector('[data-runtime-keys]')?.value.trim() || '',
+    })).filter(source => source.path);
+  }
+
+  renderRuntimeForm();
+}
+
+function renderRuntimeVariableGrid(previews) {
+  return `<div class="runtime-key-list">${Object.entries(previews).map(([key, value]) => `
+    <div class="runtime-key-row">
+      <span class="mono">${esc(key)}</span>
+      <div class="runtime-key-actions">
+        <code>${esc(value)}</code>
+        <button class="btn-link" type="button" onclick="deleteRuntimeVariable('${esc(key)}')">remove</button>
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderRuntimeSourceEditor(source, index, summary) {
+  const resolvedKeys = summary?.resolved_keys || [];
+  const status = summary ? (summary.exists ? 'present' : 'missing') : 'new';
+  const count = summary ? `${resolvedKeys.length} keys` : 'not saved';
+  const allowOpen = source.mode === 'allow';
+  return `
+    <div class="runtime-source-editor" data-runtime-source>
+      <div class="runtime-source-editor-main">
+        <input data-runtime-path class="settings-input mono" value="${esc(source.path || '')}" placeholder=".env">
+        <select data-runtime-mode class="settings-select">
+          <option value="all" ${source.mode === 'all' ? 'selected' : ''}>all keys</option>
+          <option value="allow" ${source.mode === 'allow' ? 'selected' : ''}>only listed keys</option>
+        </select>
+        <button class="btn-link" type="button" data-runtime-remove="${index}">remove</button>
+      </div>
+      ${allowOpen ? `<input data-runtime-keys class="settings-input mono" value="${esc(source.keys || '')}" placeholder="KEY1,KEY2">` : '<input data-runtime-keys type="hidden" value="">'}
+      <div class="runtime-source-foot">
+        <span>${esc(count)}</span>
+        <span class="runtime-source-status ${status === 'present' ? 'ok' : (status === 'missing' ? 'bad' : '')}">${status}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderRuntimeKeyGrid(previews) {
+  return `<div class="runtime-key-list">${Object.entries(previews).map(([key, value]) => `
+    <div class="runtime-key-row">
+      <span class="mono">${esc(key)}</span>
+      <code>${esc(value)}</code>
+    </div>
+  `).join('')}</div>`;
+}
+
+async function saveRuntimeEnvSettings(draft, statusEl) {
+  statusEl.textContent = 'saving...';
+  const payload = {
+    inherit_shell: draft.inheritShell,
+    dotenv: draft.sources.map(source => ({
+      path: source.path,
+      mode: source.mode,
+      keys: source.mode === 'allow' ? source.keys : [],
+    })),
+  };
+  try {
+    const res = await fetch('/api/workspace/runtime-env', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = `error: ${data.error || res.status}`;
+      return;
+    }
+    state.workspace = data;
+    statusEl.textContent = 'saved';
+    renderSettings(document.getElementById('settings-body'), state.workspace, state.frontierMeta);
+    fetchAll();
+  } catch (e) {
+    statusEl.textContent = 'request failed';
+  }
+}
+
+function parseDotenvText(text) {
+  const variables = [];
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.slice(7).trim();
+    const idx = line.indexOf('=');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    } else {
+      value = value.replace(/\s+#.*$/, '').trim();
+    }
+    variables.push({key, value});
+  }
+  return variables;
+}
+
+function openRuntimeVariableModal() {
+  openRuntimeEnvModal({
+    title: 'Add variable',
+    body: `
+      <label class="settings-field">
+        <span>Key</span>
+        <input id="runtime-var-key" class="settings-input mono" placeholder="OPENAI_API_KEY">
+      </label>
+      <label class="settings-field">
+        <span>Value</span>
+        <textarea id="runtime-var-value" class="settings-input mono" rows="4" placeholder="secret value"></textarea>
+      </label>
+    `,
+    primary: 'Save variable',
+    onSave: async (statusEl) => {
+      const key = document.getElementById('runtime-var-key').value.trim();
+      const value = document.getElementById('runtime-var-value').value;
+      if (!key) {
+        statusEl.textContent = 'key is required';
+        return false;
+      }
+      return saveRuntimeVariables([{key, value}], statusEl);
+    },
+  });
+}
+
+function openRuntimeImportModal() {
+  openRuntimeEnvModal({
+    title: 'Import .env',
+    body: `
+      <div class="runtime-import-tabs">
+        <label class="settings-field">
+          <span>Paste .env contents</span>
+          <textarea id="runtime-env-paste" class="settings-input mono" rows="10" placeholder="KEY=value&#10;OTHER=value"></textarea>
+        </label>
+        <label class="settings-field">
+          <span>Or upload file</span>
+          <input id="runtime-env-file" class="settings-input" type="file" accept=".env,text/plain">
+        </label>
+      </div>
+      <div id="runtime-import-preview" class="settings-help">Paste or upload to preview keys before import.</div>
+    `,
+    primary: 'Import variables',
+    onReady: () => {
+      const paste = document.getElementById('runtime-env-paste');
+      const file = document.getElementById('runtime-env-file');
+      const preview = document.getElementById('runtime-import-preview');
+      const updatePreview = () => {
+        const vars = parseDotenvText(paste.value);
+        preview.textContent = vars.length
+          ? `Found ${vars.length} key${vars.length === 1 ? '' : 's'}: ${vars.map(v => v.key).join(', ')}`
+          : 'No valid KEY=value entries found yet.';
+      };
+      paste.addEventListener('input', updatePreview);
+      file.addEventListener('change', async () => {
+        const picked = file.files && file.files[0];
+        if (!picked) return;
+        paste.value = await picked.text();
+        updatePreview();
+      });
+    },
+    onSave: async (statusEl) => {
+      const variables = parseDotenvText(document.getElementById('runtime-env-paste').value);
+      if (!variables.length) {
+        statusEl.textContent = 'no variables found';
+        return false;
+      }
+      return saveRuntimeVariables(variables, statusEl);
+    },
+  });
+}
+
+function openRuntimeEnvModal({title, body, primary, onSave, onReady}) {
+  let overlay = document.getElementById('runtime-env-modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'runtime-env-modal-overlay';
+    overlay.className = 'mini-modal-overlay';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div class="mini-modal" onclick="event.stopPropagation()">
+      <div class="mini-modal-header">
+        <span class="modal-title">${esc(title)}</span>
+        <span class="close-btn" id="runtime-mini-close">&times;</span>
+      </div>
+      <div class="mini-modal-body">${body}</div>
+      <div class="settings-actions">
+        <span id="runtime-mini-status" class="strategy-status"></span>
+        <span class="spacer"></span>
+        <button id="runtime-mini-cancel" class="btn-ghost compact" type="button">Cancel</button>
+        <button id="runtime-mini-save" class="btn-primary" type="button">${esc(primary)}</button>
+      </div>
+    </div>
+  `;
+  const close = () => overlay.classList.add('hidden');
+  overlay.classList.remove('hidden');
+  overlay.onclick = close;
+  overlay.querySelector('#runtime-mini-close').onclick = close;
+  overlay.querySelector('#runtime-mini-cancel').onclick = close;
+  overlay.querySelector('#runtime-mini-save').onclick = async () => {
+    const ok = await onSave(overlay.querySelector('#runtime-mini-status'));
+    if (ok) close();
+  };
+  if (onReady) onReady();
+}
+
+async function saveRuntimeVariables(variables, statusEl) {
+  statusEl.textContent = 'saving...';
+  try {
+    const res = await fetch('/api/workspace/runtime-variables', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({variables}),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = `error: ${data.error || res.status}`;
+      return false;
+    }
+    state.workspace = data;
+    renderSettings(document.getElementById('settings-body'), state.workspace, state.frontierMeta);
+    fetchAll();
+    return true;
+  } catch (e) {
+    statusEl.textContent = 'request failed';
+    return false;
+  }
+}
+
+async function deleteRuntimeVariable(key) {
+  await fetch('/api/workspace/runtime-variables', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({delete_keys: [key]}),
+  });
+  const ws = await fetch('/api/workspace').then(r => r.json());
+  state.workspace = ws;
+  renderSettings(document.getElementById('settings-body'), state.workspace, state.frontierMeta);
+  fetchAll();
+}
+
+function renderCheckSummaryRow(node) {
+  const latest = node.checks.latest;
+  const ok = latest.status === 'passed';
+  return `
+    <div class="runtime-check-row" onclick="openDrawer('${node.id}')">
+      <span class="status-dot" style="background:${ok ? 'var(--green)' : 'var(--red)'}"></span>
+      <span class="mono">${shortId(node.id)}</span>
+      <span>${esc(latest.status || 'unknown')}</span>
+      <span class="spacer"></span>
+      <span class="mono">${latest.score != null ? Number(latest.score).toFixed(2) : '--'}</span>
+      <span>${latest.trace_count || 0} traces</span>
     </div>
   `;
 }
