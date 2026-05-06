@@ -28,9 +28,26 @@ Pool mode defaults to `commit_strategy=tracked-only` so warm state in slots stay
 
 **Remote-backend mode.** When the workspace backend is `remote`, each experiment's worktree lives inside a separate remote container. Subagents use `evo bash / read / write / edit / glob / grep --exp-id <id>` instead of native `Bash`/`Read`/`Write`/`Edit` tools. **Every brief you write to a subagent in remote mode MUST start by stating the exp_id explicitly:** `"Your experiment id is exp_NNNN. Pass --exp-id exp_NNNN on every evo command."` This is the only thing that prevents one subagent from accidentally operating on another's container. evo CLI hard-errors if `--exp-id` is missing, but it can't catch a subagent that confidently passes the wrong id; the brief is the discipline.
 
+Remote `evo run <exp_id>` is also the recovery command. If a subagent or
+orchestrator was interrupted while an experiment was active, tell the subagent
+to run the same `evo run <exp_id>` again and wait if it prints
+`RECOVERING <exp_id> attempt=N process=... state=...`. That means evo is
+reattaching to the existing remote process and finalizing the original attempt;
+starting a new experiment or discarding the active one is only appropriate after
+evo reports the attempt is unrecoverable.
+
+For expensive benchmarks, design recovery around `EVO_CHECKPOINT_DIR`, not
+process checkpoint/restore. evo mirrors checkpoint files into
+`attempts/NNN/checkpoints/` during remote runs and writes `attempt_state.json`
+for phase-level recovery. If the remote container itself dies, arbitrary process
+memory is gone; the benchmark must know how to continue from its checkpoint
+files or the attempt should be treated as `remote_infra_failure`.
+
 **Infra setup is not user-invocable.** If a remote provider is missing SDKs, auth, or setup details, read `plugins/evo/skills/infra-setup/references/provider-matrix.md`. It summarizes what each provider actually needs and replaces the old per-provider prompt files.
 
 **Runtime recipe/env.** Benchmark runtime is evo configuration, not something subagents should rediscover or copy into worktrees. Use `evo config runtime show` for prepare/before-run/prefix and `evo env show` for redacted env sources. If a run fails because expected runtime setup or env is missing, report it as setup failure or configure it from the orchestrator; do not patch benchmark code to bake in secrets or local paths. Use `evo run <exp_id> --check` for non-committing wiring validation; do not invent ad-hoc validation wrappers.
+
+**CLI reference.** If you are unsure which command to use, read `plugins/evo/skills/references/cli-quick-reference.md`. It is the canonical command map; this skill only repeats the high-frequency commands.
 
 ## Prerequisites
 

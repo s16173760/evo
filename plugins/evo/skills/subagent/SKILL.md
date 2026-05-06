@@ -34,6 +34,8 @@ All `evo ...` commands run from the **main repo root** (not inside the worktree)
 Only file reads/edits use the **worktree path** returned by `evo new`. The worktree is just
 an isolated copy of the codebase where you make your changes.
 
+Full CLI reference: `plugins/evo/skills/references/cli-quick-reference.md`. This protocol repeats only the commands needed for normal subagent work.
+
 ## Useful Commands
 
 ```bash
@@ -134,6 +136,21 @@ evo run <exp_id>
 
 This runs benchmark + gate and prints the result.
 
+In remote-backend workspaces, if a prior `evo run <exp_id>` was interrupted
+or the experiment is still `active`, run `evo run <exp_id>` again first. That
+is the recovery path: evo will try to attach to the existing remote process and
+finalize the same attempt instead of starting attempt 002. If the output prints
+`RECOVERING <exp_id> attempt=N process=... state=...`, wait for that command to
+finish. Do not discard the active experiment or create a replacement unless evo
+reports it is unrecoverable or the orchestrator explicitly tells you to.
+
+Benchmarks also receive `EVO_CHECKPOINT_DIR`. Expensive benchmarks should write
+portable progress files there. evo mirrors that directory back into
+`attempts/NNN/checkpoints/` during remote runs and records phase progress in
+`attempt_state.json`. This is the recovery boundary for container death: evo can
+restart from benchmark-owned checkpoint files, but it does not freeze/restore an
+arbitrary Linux process.
+
 **If the workspace was initialized with `commit_strategy=tracked-only` (the default for `--backend pool`):** `evo run` only commits modifications to *tracked* files. New files require an explicit `git add` from inside the worktree, then a shisa-kanko ack on the run command:
 
 ```bash
@@ -162,6 +179,7 @@ The ack flag is required when the worktree has any untracked, non-gitignored fil
 
 - **`FAILED`** (infra error, non-zero exit, timeout): couldn't evaluate. Doesn't consume the retry budget.
   - Transient / fixable locally: retry.
+  - `remote_infra_failure:...`: remote container or agent infrastructure failed. Report it to the orchestrator unless your brief explicitly says to retry infra failures.
   - Structural (benchmark broken, evo misconfigured): report to orchestrator and stop.
   - Not worth fixing: `evo discard <id> --reason "..."`.
 
@@ -195,7 +213,7 @@ Check `.evo/meta.json` for `"instrumentation_mode"` (`"sdk"` or `"inline"`) to s
 
 Trace quality is part of the benchmark contract. After a failed baseline or failed task, the orchestrator should be able to reconstruct what happened using only `evo traces <exp_id> <task_id>`. If not, the trace logging is too thin.
 
-- **SDK mode** (`from evo_agent import Run`): enrich traces by adding `run.log(task_id, ...)` calls for more observability, or extra fields to `run.report()`.
+- **SDK mode** (`from evo_agent import Run`): read `plugins/evo/skills/references/agent-sdk-reference.md`, then enrich traces by adding `run.log(task_id, ...)` calls or extra fields to `run.report()`.
 - **Inline mode** (benchmark has local `log_task`/`logTask` helpers): add fields to the trace dict built inside `log_task()`.
 - **LLM / agent benchmarks**: log the task input, observation/frame summary, prompt or message summary, model/tool response, selected action, retries/errors, and final task outcome. If the project already has a separate recorder, decide whether evo traces mirror the important fields or whether the recorder artifact is explicitly linked from the evo trace.
 
