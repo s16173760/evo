@@ -2866,9 +2866,13 @@ def cmd_gc(args: argparse.Namespace) -> int:
             # Best-effort cleanup; one node's failure doesn't block others.
             pass
 
-    # Pass 2: cross-backend orphan sweep. Walk every backend referenced
-    # by any node, plus the workspace-default backend, so we sweep state
-    # for resources whose graph entry has vanished.
+    # Pass 2: cross-backend orphan sweep. Discover backends three ways:
+    #   (a) any backend referenced by a current graph node
+    #   (b) the workspace-default backend
+    #   (c) any backend with state files on disk under backend_state/
+    #       — catches backends used by experiments whose graph entries
+    #       have been deleted entirely (post-`evo reset` survivors,
+    #       hand-edited graphs)
     swept: dict[str, list[str]] = {}
     distinct_specs: dict[tuple[str, str], dict | None] = {}
     for node in graph["nodes"].values():
@@ -2880,7 +2884,7 @@ def cmd_gc(args: argparse.Namespace) -> int:
             distinct_specs[key] = node
         except Exception:
             continue
-    # Always include workspace default
+    # (b) workspace default
     try:
         from .backends import backend_spec_from_config
         spec_name, spec_config = backend_spec_from_config(config)
@@ -2888,10 +2892,51 @@ def cmd_gc(args: argparse.Namespace) -> int:
         distinct_specs.setdefault(key, None)
     except Exception:
         pass
+    # (c) state files on disk — read each to recover its backend spec
+    try:
+        from .core import workspace_path
+        state_dir = workspace_path(root) / "backend_state"
+        if state_dir.exists():
+            for state_file in state_dir.glob("*.json"):
+                try:
+                    state_data = json.loads(state_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                # Remote state files carry provider + provider_config.
+                # Pool state files don't carry config (slot paths are the
+                # config; recoverable from the file's slot list).
+                if state_file.name.startswith("remote-"):
+                    provider = state_data.get("provider")
+                    if not provider:
+                        continue
+                    spec_config = {
+                        "provider": provider,
+                        "provider_config": state_data.get("provider_config", {}) or {},
+                    }
+                    key = ("remote", json.dumps(spec_config, sort_keys=True))
+                    distinct_specs.setdefault(key, None)
+                elif state_file.name.startswith("pool-"):
+                    slots = [s.get("path") for s in state_data.get("slots", [])
+                             if s.get("path")]
+                    if not slots:
+                        continue
+                    spec_config = {"slots": slots}
+                    key = ("pool", json.dumps(spec_config, sort_keys=True))
+                    distinct_specs.setdefault(key, None)
+    except Exception:
+        pass
 
-    for (name, _key), example_node in distinct_specs.items():
+    for (name, key_str), example_node in distinct_specs.items():
         try:
-            backend = _resolve_backend(example_node)
+            # When the spec didn't come from a node, build the backend
+            # directly from the spec we recovered.
+            if example_node is None:
+                spec_config = json.loads(key_str)
+                backend = _lb(root, explicit_name=name,
+                             explicit_config=spec_config,
+                             workspace_config=config)
+            else:
+                backend = _resolve_backend(example_node)
             if hasattr(backend, "sweep_orphans"):
                 ids = backend.sweep_orphans(root, live_exp_ids)
                 if ids:
