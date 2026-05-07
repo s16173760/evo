@@ -94,17 +94,25 @@ Repeat until interrupted or stall limit reached:
 
 ```bash
 evo scratchpad          # bounded state summary (tree, frontier, awaiting decision, gates, annotations, what-not-to-try, notes)
-evo config show         # redacted workspace config
-evo config runtime show # runtime prepare/before-run/prefix recipe
-evo env show            # redacted runtime env metadata
-evo frontier            # explorable nodes ranked by the configured strategy (JSON envelope: {strategy, nodes[{id,score,rank,...}], generated_at})
 evo status              # one-line summary
+evo frontier            # explorable nodes ranked by the configured strategy (JSON envelope: {strategy, nodes[{id,score,rank,...}], generated_at})
+evo show <id>           # full state of one node (attempts, diffs, annotations, notes, effective gates) -- the cleanest one-node getter
+evo awaiting            # evaluated nodes awaiting commit/discard decision
+evo discards [--like <text>]  # discarded nodes; useful for "have we tried this before"
+evo notes               # all notes (per-node + workspace), recent first
 evo annotations         # all annotations (filterable with --task/--exp)
 evo path <id>           # root-to-node chain with scores
-evo diff <id>           # diff vs parent
-evo diff <id> <other>   # diff between any two experiments
+evo diff <id> [<other>] # diff vs parent (or between two experiments)
 evo gate list <id>      # effective gates for a node (inherited from ancestors)
 evo gate check <id>     # run effective gates without benchmark or state mutation
+evo infra log           # recorded infra/strategy events (epoch bumps, harness changes)
+
+# Settings (read)
+evo config show               # everything; use the next three for narrower views
+evo config get <field>        # one field
+evo config backend show       # current execution backend + provider config
+evo config runtime show       # runtime prepare/before-run/prefix recipe
+evo env show                  # redacted runtime env metadata
 ```
 
 ### 2. Analyze state and do structural aggregation
@@ -118,7 +126,7 @@ From the scratchpad, frontier, traces, and annotations, determine:
 
 **Read the "Awaiting Decision" section of the scratchpad.** Evaluated nodes (ran, bad outcome, not yet discarded) are a cross-agent signal: if three subagents in the last round produced evaluated nodes that all failed the same gate, surface the pattern -- maybe the gate is too tight, maybe the approach has a shared flaw. Either tell the next round to avoid it, or propose a brief that attacks it directly. Without this cross-cutting read, each subagent rediscovers the same wall independently.
 
-**Structural pass.** For the evaluated nodes this round, load their `outcome.json` files into Python and aggregate: co-occurring `gate_failures`, shared zero-score task IDs in `benchmark.result.tasks`, recurring substrings across `error` fields.
+**Structural pass.** For the evaluated nodes this round, load their `outcome.json` files into Python and aggregate: co-occurring `gate_failures`, shared zero-score task IDs in `benchmark.result.tasks`, recurring substrings across `error` fields. (Bulk-reading attempt artifacts under `.evo/run_*/experiments/<exp>/attempts/<NNN>/` is the right tool for this — `evo show <id>` is for one-node introspection, not batch aggregation.)
 
 **Emit intersections explicitly.** After computing the per-pattern sets (call them A, B, ...), MUST emit each pairwise intersection `A ∩ B` as a distinct pattern entry whenever at least 2 experiments exhibit both. Intersections carry different strategic implications from their components (compound failures warrant different briefs than single-failure clusters) and do not reconstruct from sub-agent summaries -- this is a parent-level aggregation that must happen inline.
 
@@ -282,7 +290,7 @@ Go back to step 1.
 
 ## Resetting the eval epoch
 
-`evo infra -m "<reason>" --breaking` bumps `current_eval_epoch` and blocks
+`evo infra event -m "<reason>" --breaking` bumps `current_eval_epoch` and blocks
 non-root `evo run` calls until a new root baseline commits. Old experiments
 stay in the tree but are excluded from frontier and best-score lookups via
 their epoch tag.
@@ -293,7 +301,7 @@ Don't use it for single bad experiments (`evo discard`) or one tight gate
 (relax the gate at the relevant node).
 
 Recovery:
-1. `evo infra -m "<reason>" --breaking`
+1. `evo infra event -m "<reason>" --breaking`
 2. Fix the harness in the baseline worktree (or branch a fresh root).
 3. `evo new --parent root -m "v2 baseline: <what changed>"`
 4. `evo run <new_exp_id>` -- commits, flips the block off, establishes the

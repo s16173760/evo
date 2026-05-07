@@ -39,22 +39,44 @@ Full CLI reference: `plugins/evo/skills/references/cli-quick-reference.md`. This
 ## Useful Commands
 
 ```bash
-evo scratchpad          # bounded state summary
-evo status              # one-line: metric, best score, experiment counts
-evo show <id>           # full state of one experiment (attempts, diffs, annotations, notes)
-evo config show         # redacted workspace config
-evo config runtime show # runtime prepare/before-run/prefix recipe
-evo env show            # redacted runtime env metadata
-evo traces <id> <task>  # per-task trace detail
-evo path <id>           # root-to-node chain with scores
-evo diff <id>           # diff vs parent
-evo diff <id> <other>   # diff between any two experiments
-evo annotations         # all annotations (filterable with --task/--exp)
-evo notes               # all notes (per-node + workspace), recent first
-evo gate list <id>      # effective gates for a node (inherited from ancestors)
-evo gate check <id>     # run effective gates without benchmark or state mutation
+evo scratchpad                # bounded state summary
+evo status                    # one-line: metric, best score, experiment counts
+evo show <id>                 # full state of one experiment (attempts, diffs, annotations, notes)
+evo path <id>                 # root-to-node chain with scores
+evo diff <id> [<other>]       # diff vs parent (or between two experiments)
+evo traces <id> <task>        # per-task trace detail
+
+# Read state across nodes
+evo awaiting                  # evaluated nodes awaiting commit/discard decision
+evo discards [--like <text>]  # discarded nodes (optional substring filter on hypothesis)
+evo annotations               # all annotations (filterable with --task/--exp)
+evo notes [--exp <id>] [--workspace] [--limit N]   # notes (per-node + workspace)
+evo infra log [--limit N]     # recorded infra/strategy events
+
+# Read settings
+evo config show               # redacted workspace config (everything)
+evo config get <field>        # one field; mirror of `evo config set` choices
+evo config backend show       # current execution backend + provider config
+evo config runtime show       # runtime prepare/before-run/prefix recipe
+evo env show                  # redacted runtime env metadata
+
+# Gate ops
+evo gate list <id>            # effective gates for a node (inherited from ancestors)
+evo gate check <id>           # run effective gates without benchmark or state mutation
 evo gate add <id> --name <name> --command "<command>"  # add a gate
+
+# Write paths used during iteration
+evo new --parent <id> -m "<hypothesis>"   # allocate sibling experiment
+evo run <id> [--check]                    # run (or --check to validate without consuming attempts)
+evo discard <id> --reason "<text>"        # reject + park (keeps anchor ref)
+evo restore <id>                          # un-discard or un-prune
+evo annotate <id> [<task_id>] "<text>"    # per-attempt analysis
+evo set <id> --note "<text>" [--tag <t>]  # per-node note from orchestrator
+evo note "<text>"                         # workspace-level cross-cutting note
 ```
+
+For the read/write policy across worktree files, `.evo/` artifacts, and config,
+see `references/cli-quick-reference.md` "Reading workspace state".
 
 ## First Steps
 

@@ -107,6 +107,82 @@ try {
 }
 ```
 
+## Run.report() reference
+
+Records the eval result for one task and writes its trace file. Call once per task.
+
+**Python signature:**
+
+```python
+run.report(
+    task_id,                      # required: str
+    score,                        # required: float
+    *,
+    status=None,                  # "passed" | "failed"; default: derived from score >= pass_threshold
+    pass_threshold=0.5,           # threshold for the auto-derived status
+    summary=None,                 # short human-readable description of the result
+    failure_reason=None,          # short tag (e.g. "wrong_answer", "timeout", "exception")
+    cost=None,                    # dict; e.g. {"input_tokens": 1234, "output_tokens": 567, "usd": 0.012}
+    started_at=None,              # ISO8601; default: time of first log() for this task, else Run start
+    ended_at=None,                # ISO8601; default: now
+    artifacts=None,               # dict[str, str]; e.g. {"screenshot": "/path/to/png"}
+    direction=None,               # "max" | "min"; only set when this task differs from the workspace metric
+    **extra,                      # any extra keys are merged into the trace as-is
+)
+```
+
+**Node signature:**
+
+```js
+run.report(taskId, {
+    score,                        // required: number
+    status,                       // 'passed' | 'failed'; default derived from passThreshold
+    passThreshold = 0.5,
+    summary,
+    failureReason,                // snake-cased to failure_reason in the trace
+    cost,
+    startedAt, endedAt,
+    artifacts,
+    direction,                    // 'max' | 'min'
+    ...extra,
+});
+```
+
+**Field semantics:**
+
+| Param | Required | Lands in trace as | Notes |
+| --- | --- | --- | --- |
+| `task_id` / `taskId` | yes | `task_id` | String-coerced. Distinct task IDs become distinct trace files (`task_<id>.json`). |
+| `score` | yes | `score` | Numeric. Aggregated by `finish()` as the mean across reported tasks unless overridden. |
+| `status` | no | `status` | Pass through. If omitted, derived: `score >= pass_threshold ? "passed" : "failed"`. |
+| `pass_threshold` / `passThreshold` | no | (not stored) | Used only to derive `status` when `status` is omitted. |
+| `summary` | no | `summary` | Short string. Surfaced in `evo show <id>`. |
+| `failure_reason` / `failureReason` | no | `failure_reason` | Short tag. Cross-experiment scans cluster on this; keep tags stable across runs. |
+| `cost` | no | `cost` | Free-form dict. Convention: `{input_tokens, output_tokens, usd, model}`. |
+| `started_at` / `ended_at` | no | `started_at`, `ended_at` | ISO8601. Filled automatically when omitted. |
+| `artifacts` | no | `artifacts` | `{name: path}`. Paths must be readable by the orchestrator. |
+| `direction` | no | `direction` | `"max"` or `"min"`. Required when this task's optimal direction differs from the workspace metric (e.g. latency tasks in a max-accuracy benchmark). Validated; raises on other values. Also propagates to the final result's `tasks_meta`. |
+| `**extra` / `...extra` | no | (merged into trace) | Any additional keys are written verbatim. Useful for benchmark-specific fields. |
+
+**Side effects of `report()`:**
+
+- Writes `task_<id>.json` into `EVO_TRACES_DIR` immediately (so traces survive crashes).
+- Drains any prior `log(task_id, ...)` entries for this task into the trace's `log` array.
+- Records the score in the Run's in-memory tally for `finish()` to aggregate.
+- Records `direction` (if given) into `tasks_meta` for the final result.
+
+**Run.finish():**
+
+```python
+run.finish(score=None)            # Python: score override is positional or keyword
+```
+
+```js
+await run.finish({ score });      // Node: returns a promise
+```
+
+If `score` is omitted, `finish()` computes the mean of all reported task scores. Always call exactly once. The `with Run() as run:` / try-finally pattern in the examples above ensures it runs even on benchmark crashes.
+
 ## Gates
 
 Gates are pass/fail commands. They must exit non-zero on regression.

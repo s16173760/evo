@@ -289,7 +289,7 @@ evo run exp_0000 --check
 evo gate check exp_0000
 ```
 
-`--check` runs the configured benchmark and gates, writes artifacts under `.evo/run_*/experiments/exp_0000/checks/NNN/`, and does **not** commit, evaluate, or consume retry budget. It also uses evo's real placeholder substitution, runtime env resolution, remote workspace routing, and absolute `EVO_RESULT_PATH` / `EVO_TRACES_DIR` paths, so do not hand-roll a `mktemp` wrapper.
+`--check` runs the configured benchmark and gates and writes artifacts to a fresh check directory, but does **not** commit, evaluate, or consume retry budget. It uses evo's real placeholder substitution, runtime env resolution, remote workspace routing, and absolute `EVO_RESULT_PATH` / `EVO_TRACES_DIR` paths, so do not hand-roll a `mktemp` wrapper. Inspect the check artifacts with `evo show exp_0000` (the latest check appears under `attempts`).
 
 Use `evo gate check <exp_id>` when only gate wiring changed or when you need to validate inherited gates without running the benchmark. It writes a `gate_check.json` artifact under the same checks directory and also does not mutate experiment state.
 
@@ -339,7 +339,7 @@ evo run exp_0000
 
 If gates failed, `evo run` exits non-zero and leaves the experiment in a failed state. Fix the benchmark or target inside the worktree, commit, then `evo run exp_0000` again.
 
-**If `evo run` fails with a path error** (typically: `benchmark.py` not found), the stored benchmark command in `.evo/run_0000/config.json` is missing the `{worktree}` placeholder. Fix by re-initializing: `evo discard exp_0000 --reason "benchmark command missing {worktree}"` then re-run step 7 with the correct `--benchmark` string. Hand-editing `config.json` works but is technical debt.
+**If `evo run` fails with a path error** (typically: `benchmark.py` not found), the stored benchmark command is missing the `{worktree}` placeholder. Confirm with `evo config get benchmark`, then fix it in place: `evo config set benchmark "<correct command>"`. Re-run `evo run exp_0000` if attempts remain; otherwise `evo discard exp_0000 --reason "..."` and re-allocate.
 
 ## 12. Write `.evo/project.md`
 

@@ -449,6 +449,8 @@ def cmd_config(args: argparse.Namespace) -> int:
         return cmd_config_show(args)
     if args.config_action == "set":
         return cmd_config_set(args)
+    if args.config_action == "get":
+        return cmd_config_get(args)
     if args.config_action == "backend":
         return cmd_config_backend(args)
     if args.config_action == "runtime":
@@ -507,6 +509,38 @@ def cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+_CONFIG_FIELD_TO_KEY: dict[str, str] = {
+    "project-name": "project_name",
+    "target": "target",
+    "benchmark": "benchmark",
+    "metric": "metric",
+    "commit-strategy": "commit_strategy",
+    "max-attempts": "max_attempts",
+    "gate": "gate",
+    "frontier-strategy": "frontier_strategy",
+}
+
+
+def cmd_config_get(args: argparse.Namespace) -> int:
+    """Print one config field. Mirror of `evo config set`'s field choices."""
+    root = repo_root()
+    _require_workspace(root)
+    config = load_config(root)
+    key = _CONFIG_FIELD_TO_KEY[args.field]
+    value = config.get(key)
+    if getattr(args, "json", False):
+        print(json.dumps(value))
+        return 0
+    if value is None:
+        print("")
+        return 0
+    if isinstance(value, (dict, list)):
+        print(json.dumps(value, indent=2))
+    else:
+        print(value)
+    return 0
+
+
 def cmd_config_set(args: argparse.Namespace) -> int:
     root = repo_root()
     _require_workspace(root)
@@ -526,6 +560,31 @@ def cmd_config_set(args: argparse.Namespace) -> int:
             if args.value not in {"all", "tracked-only"}:
                 raise RuntimeError("commit-strategy must be 'all' or 'tracked-only'")
             config["commit_strategy"] = args.value
+        elif args.field == "max-attempts":
+            try:
+                attempts = int(args.value)
+            except ValueError:
+                raise RuntimeError("max-attempts must be a positive integer")
+            if attempts < 1:
+                raise RuntimeError("max-attempts must be a positive integer")
+            config["max_attempts"] = attempts
+        elif args.field == "gate":
+            value = args.value.strip()
+            config["gate"] = value or None
+        elif args.field == "frontier-strategy":
+            from . import frontier_strategies as fs
+            raw = args.value.strip()
+            if raw.startswith("{"):
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(f"frontier-strategy must be valid JSON: {exc}")
+            else:
+                parsed = {"kind": raw, "params": {}}
+            try:
+                config["frontier_strategy"] = fs.validate_frontier_strategy(parsed)
+            except ValueError as exc:
+                raise RuntimeError(str(exc))
         else:
             raise RuntimeError(f"unknown config field: {args.field}")
         atomic_write_json(config_path(root), config)
@@ -593,6 +652,25 @@ def cmd_config_backend(args: argparse.Namespace) -> int:
 
     root = repo_root()
     _require_workspace(root)
+
+    if args.backend == "show":
+        config = load_config(root)
+        redacted = _redact_config_value(config)
+        name = redacted.get("execution_backend", "worktree")
+        cfg = redacted.get("execution_backend_config") or {}
+        if getattr(args, "json", False):
+            print(json.dumps(
+                {"execution_backend": name, "execution_backend_config": cfg},
+                indent=2,
+            ))
+            return 0
+        print(f"execution_backend: {name}")
+        if cfg:
+            print(f"execution_backend_config: {json.dumps(cfg, sort_keys=True)}")
+        else:
+            print("execution_backend_config: <none>")
+        return 0
+
     backend_name, backend_config = _resolve_backend_cli_args(
         root=root,
         backend=args.backend,
@@ -3408,7 +3486,19 @@ def cmd_notes_list(args: argparse.Namespace) -> int:
 
 
 def cmd_infra(args: argparse.Namespace) -> int:
+    """Dispatch for `evo infra event` and `evo infra log`."""
     root = repo_root()
+    if args.infra_action == "log":
+        from .core import infra_path, load_json
+        data = load_json(infra_path(root), {"events": []})
+        events = list(reversed(data.get("events", [])))  # most-recent first
+        limit = getattr(args, "limit", None)
+        if limit:
+            events = events[: int(limit)]
+        print(json.dumps(events, indent=2))
+        return 0
+
+    # `event` action: append + (optionally) bump epoch
     event = append_infra_event(root, args.message, args.breaking)
     if args.breaking:
         config = load_config(root)
@@ -3655,10 +3745,46 @@ def build_parser() -> argparse.ArgumentParser:
     config_set_p = config_sub.add_parser("set", help="set basic workspace configuration fields")
     config_set_p.add_argument(
         "field",
-        choices=["project-name", "target", "benchmark", "metric", "commit-strategy"],
+        choices=[
+            "project-name",
+            "target",
+            "benchmark",
+            "metric",
+            "commit-strategy",
+            "max-attempts",
+            "gate",
+            "frontier-strategy",
+        ],
     )
-    config_set_p.add_argument("value")
+    config_set_p.add_argument(
+        "value",
+        help=(
+            "field value. For frontier-strategy pass the kind (e.g. 'argmax', "
+            "'epsilon_greedy') or a JSON object like '{\"kind\": ..., \"params\": {...}}'. "
+            "For gate pass the command string (empty string clears it)."
+        ),
+    )
     config_set_p.set_defaults(func=cmd_config)
+    config_get_p = config_sub.add_parser(
+        "get",
+        help="print one workspace configuration field (mirror of `evo config set`)",
+    )
+    config_get_p.add_argument(
+        "field",
+        choices=[
+            "project-name",
+            "target",
+            "benchmark",
+            "metric",
+            "commit-strategy",
+            "max-attempts",
+            "gate",
+            "frontier-strategy",
+        ],
+    )
+    config_get_p.add_argument("--json", action="store_true",
+                              help="emit JSON (preserves null and dict structure)")
+    config_get_p.set_defaults(func=cmd_config)
     config_runtime_p = config_sub.add_parser(
         "runtime",
         help="configure workspace runtime recipe",
@@ -3674,9 +3800,13 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_set_p.set_defaults(func=cmd_config)
     config_backend_p = config_sub.add_parser(
         "backend",
-        help="set the workspace default execution backend",
+        help="set the workspace default execution backend, or `show` to read it",
     )
-    config_backend_p.add_argument("backend", choices=["worktree", "pool", "remote"])
+    config_backend_p.add_argument("backend", choices=["worktree", "pool", "remote", "show"])
+    config_backend_p.add_argument(
+        "--json", action="store_true",
+        help="emit JSON (only meaningful with `show`)",
+    )
     config_backend_p.add_argument(
         "--workspaces",
         help="comma-separated absolute paths to pre-built workspace directories "
@@ -4019,10 +4149,28 @@ def build_parser() -> argparse.ArgumentParser:
                          help="max notes to return (default: all)")
     notes_p.set_defaults(func=cmd_notes_list)
 
-    infra_p = sub.add_parser("infra")
-    infra_p.add_argument("-m", "--message", required=True)
-    infra_p.add_argument("--breaking", action="store_true")
-    infra_p.set_defaults(func=cmd_infra)
+    infra_p = sub.add_parser(
+        "infra",
+        help="record or read infra/strategy events that frame later experiments",
+    )
+    infra_sub = infra_p.add_subparsers(dest="infra_action", required=True)
+    infra_event_p = infra_sub.add_parser(
+        "event",
+        help="append an infra/strategy event (optionally bumps eval epoch)",
+    )
+    infra_event_p.add_argument("-m", "--message", required=True)
+    infra_event_p.add_argument(
+        "--breaking",
+        action="store_true",
+        help="advance current_eval_epoch and block cross-epoch comparisons",
+    )
+    infra_event_p.set_defaults(func=cmd_infra)
+    infra_log_p = infra_sub.add_parser(
+        "log",
+        help="print recorded infra events (most-recent first)",
+    )
+    infra_log_p.add_argument("--limit", type=int, help="max events to return")
+    infra_log_p.set_defaults(func=cmd_infra)
 
     gate_p = sub.add_parser("gate")
     gate_sub = gate_p.add_subparsers(dest="gate_action", required=True)

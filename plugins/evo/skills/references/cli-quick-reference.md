@@ -17,6 +17,25 @@ experiments; the Agent SDK instruments benchmark code.
   to touch experiment files — required for remote backends, recommended
   for local so the same code works regardless of backend.
 
+## Reading workspace state
+
+| What | How | Why |
+| --- | --- | --- |
+| Worktrees (`worktrees/<exp>/...`) | `Read`, `grep`, `Bash` directly | Just code under git. |
+| `.evo/project.md` | `Read` directly | Agent's persistent project notes (you write it, you read it). |
+| Per-attempt artifacts: `outcome.json`, `traces/task_*.json`, `diff.patch` under `.evo/run_*/experiments/<exp>/attempts/<NNN>/` | `Read`/`grep` directly for cross-experiment scans; `evo show <id>` for one node | Immutable once written. Bulk reads beat N CLI subprocesses. |
+| Graph state (nodes, status, scores, parents, notes) | `evo show <id>`, `evo awaiting`, `evo discards`, `evo notes`, `evo scratchpad` | Lock-managed; schema may shift; getters survive layout changes. |
+| Config (`config.json`) | `evo config show`, `evo config get <field>`, `evo config backend show`, `evo config runtime show`, `evo env show` | Lock-managed; concurrent dashboard writes possible. |
+| Infra event log | `evo infra log` | Has a getter; no need to find the file. |
+
+**All writes go through the CLI** — `evo config set`, `evo new`, `evo run`,
+`evo discard`, `evo restore`, `evo gate add`, `evo env load`, `evo set`,
+`evo annotate`, `evo note`, `evo infra event`. Hand-editing `graph.json` /
+`config.json` races with the dashboard and bypasses validation.
+
+The exception: `.evo/project.md` is agent-authored — write it with the `Write`
+tool when you need to update it.
+
 ## Setup
 
 ```bash
@@ -43,15 +62,55 @@ evo init \
 ## Configuration
 
 ```bash
-evo config show [--json]
-evo config set project-name "<name>"
-evo config set target <path>
-evo config set benchmark "<command>"
-evo config set metric <max|min>
-evo config set commit-strategy <all|tracked-only>
+evo config show [--json]                           # full redacted dump
+evo config get <field> [--json]                    # one field
+evo config set <field> <value>                     # mutate one field
 ```
 
-Do not hand-edit config files; use `evo config set` or the dashboard.
+Settable / gettable fields:
+
+```
+project-name | target | benchmark | metric | commit-strategy
+max-attempts | gate | frontier-strategy
+```
+
+Examples:
+
+```bash
+evo config set metric max
+evo config set max-attempts 6
+evo config set gate "pytest -q"            # empty string clears
+evo config set frontier-strategy epsilon_greedy
+evo config set frontier-strategy '{"kind": "top_k", "params": {"k": 4}}'
+
+evo config get metric                       # -> max
+evo config get frontier-strategy --json     # -> {"kind": "...", "params": {...}}
+```
+
+Always go through the CLI; do not hand-edit `.evo/` JSON files (advisory locks
+exist for a reason and the dashboard may be writing concurrently).
+
+### Configurable fields
+
+| Field                  | Setter                              | Reader                              | Notes                                                  |
+| ---------------------- | ----------------------------------- | ----------------------------------- | ------------------------------------------------------ |
+| `project_name`         | `evo config set project-name`       | `evo config get project-name`       |                                                        |
+| `target`               | `evo config set target`             | `evo config get target`             | Path the orchestrator edits.                           |
+| `benchmark`            | `evo config set benchmark`          | `evo config get benchmark`          | Command that emits a score.                            |
+| `metric`               | `evo config set metric`             | `evo config get metric`             | `max` or `min`.                                        |
+| `commit_strategy`      | `evo config set commit-strategy`    | `evo config get commit-strategy`    | `all` or `tracked-only`.                               |
+| `max_attempts`         | `evo config set max-attempts`       | `evo config get max-attempts`       | Per-experiment retry cap. Default 3.                   |
+| `gate`                 | `evo config set gate`               | `evo config get gate`               | Workspace-default gate. Per-node gates: `evo gate add`. |
+| `frontier_strategy`    | `evo config set frontier-strategy`  | `evo config get frontier-strategy`  | Kinds: `argmax`, `top_k`, `epsilon_greedy`, `softmax`, `pareto_per_task`. |
+| `runtime` recipe       | `evo config runtime set`            | `evo config runtime show`           | `--prepare`, `--before-run`, `--prefix`.               |
+| `runtime_env`          | `evo env load/inherit-shell/clear`  | `evo env show`                      | Separate top-level command.                            |
+| `execution_backend`    | `evo config backend <name>`         | `evo config backend show`           | `worktree`, `pool`, `remote`.                          |
+| `current_eval_epoch`   | `evo infra event --breaking`        | `evo infra log`                     | Advances on breaking events; blocks cross-epoch comparisons until next run. |
+| `comparison_blocked`   | `evo infra event --breaking`        | `evo config show --json`            | Cleared after a successful run.                        |
+| `repo_root`, `workspace_dir`, `worktrees_dir`, `initialized_at` | (none) | `evo config show --json` | Init-only; do not edit.            |
+
+Host runtime (orchestrator) lives in `meta.json`, not `config.json`. Read with
+`evo host show`, set with `evo host set <claude|codex|cursor>`.
 
 ## Runtime Recipe
 
@@ -88,6 +147,7 @@ evo env clear
 ## Backends
 
 ```bash
+evo config backend show [--json]
 evo config backend worktree
 evo config backend pool --workspaces /abs/slot-a,/abs/slot-b
 evo config backend remote --provider <provider> [--provider-config k=v,...]
@@ -180,7 +240,9 @@ evo notes [--exp <id>] [--workspace] [--limit N]  # all notes, recent first
 evo annotate <exp_id> [task_id] "<analysis>"      # per-experiment, attempt-time
 evo set <exp_id> --note "<text>" [--tag <tag>]    # per-node, orchestrator
 evo note "<text>"                                  # workspace-level, untied
-evo infra -m "<message>" [--breaking]             # infra/strategy events
+evo notes [--exp <id>] [--workspace] [--limit N]   # read notes
+evo infra event -m "<message>" [--breaking]        # record infra/strategy event
+evo infra log [--limit N]                          # read recorded events
 ```
 
 - Subagents annotate their own experiments before discard so the lesson
