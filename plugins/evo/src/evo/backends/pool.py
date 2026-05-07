@@ -63,6 +63,7 @@ class PoolBackend:
                 ctx.parent_commit,
                 self._slot_id_for(ctx.root, slot_path),
                 self._all_slot_paths(ctx.root),
+                main_repo=ctx.root,
             )
             self._checkout_in_slot(slot_path, ctx.branch, ctx.parent_commit)
         except Exception:
@@ -215,23 +216,31 @@ class PoolBackend:
         ).returncode == 0
 
     def _ensure_parent_commit(
-        self, slot: Path, parent_commit: str, slot_id: int, all_slots: list[dict]
+        self, slot: Path, parent_commit: str, slot_id: int, all_slots: list[dict],
+        main_repo: Path | None = None,
     ) -> None:
         """Ensure parent_commit is reachable in the slot's git store.
 
         Lookup order:
-        1. Already present locally → done.
-        2. `git fetch --all` (origin); recheck → done if found.
-        3. Sibling slot scan: a previous experiment in another slot may have
-           created the commit; fetch directly from that slot's git dir.
-        4. Otherwise raise PoolSlotMissingCommit.
-
-        Step 3 lets pool mode work without requiring the user to push
-        experiment branches to a shared remote. Each commit lives in the slot
-        that produced it; sibling slots fetch on demand.
+        1. Already present in the slot → done.
+        2. Fetch from the main repo. evo's commit-time mirror puts every
+           pool commit in the main repo, so this resolves any post-mirror
+           parent in one local fetch.
+        3. `git fetch --all` (origin); recheck → done if found.
+        4. Sibling slot scan: legacy fallback for pre-mirror commits that
+           live only in another slot.
+        5. Otherwise raise PoolSlotMissingCommit.
         """
         if self._commit_present(slot, parent_commit):
             return
+        if main_repo is not None and self._commit_present(main_repo, parent_commit):
+            subprocess.run(
+                ["git", "-c", "protocol.file.allow=always",
+                 "fetch", str(main_repo), parent_commit],
+                cwd=slot, check=False,
+            )
+            if self._commit_present(slot, parent_commit):
+                return
         subprocess.run(["git", "fetch", "--all"], cwd=slot, check=False)
         if self._commit_present(slot, parent_commit):
             return
@@ -251,8 +260,8 @@ class PoolBackend:
                 return
         raise PoolSlotMissingCommit(
             f"slot {slot_id} ({slot}) does not have parent commit "
-            f"{parent_commit[:12]} locally. `git fetch` from origin and "
-            f"sibling slots both failed to retrieve it. Update the slot manually."
+            f"{parent_commit[:12]} locally. `git fetch` from main repo, "
+            f"origin, and sibling slots all failed. Update the slot manually."
         )
 
     @staticmethod

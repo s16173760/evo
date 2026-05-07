@@ -818,5 +818,183 @@ class TestLegacyAnchorFallback(unittest.TestCase):
             self.assertEqual(br.stdout.strip(), exp_commit)
 
 
+class TestPoolBackendAnchor(unittest.TestCase):
+    """Stage 4: pool-committed nodes must mirror their commit into the main
+    repo at run-time, write `refs/evo-anchor/<run>/<exp>` like worktree+remote
+    do, and survive both `evo discard`'s lease release and aggressive `git gc`
+    in the main repo. Without this, pool commits live only in slot dirs and
+    are unreachable from the orchestrator's `cwd=root`."""
+
+    def _run_evo(self, root: Path, args: list[str]) -> subprocess.CompletedProcess:
+        import sys as _sys
+        return subprocess.run(
+            [_sys.executable, "-c",
+             "from evo.cli import main; import sys; sys.exit(main())",
+             *args],
+            cwd=root, check=False, capture_output=True, text=True,
+            env={**__import__("os").environ, "PYTHONPATH": str(
+                Path(__file__).resolve().parent.parent / "src"
+            )},
+        )
+
+    def setUp(self):
+        self._dashboard_roots: list[Path] = []
+
+    def tearDown(self):
+        import os, signal
+        for root in self._dashboard_roots:
+            pid_file = root / ".evo" / "dashboard.pid"
+            if pid_file.exists():
+                try:
+                    pid = int(pid_file.read_text().strip())
+                    os.kill(pid, signal.SIGTERM)
+                except (OSError, ValueError):
+                    pass
+
+    def _setup_pool_workspace(self, td: Path) -> tuple[Path, list[Path]]:
+        """Initialize a main repo + 2 pre-built pool slots cloned from it."""
+        main_repo = td / "main"
+        main_repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=main_repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=main_repo, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=main_repo, check=True)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=main_repo, check=True)
+        (main_repo / "agent.py").write_text("# agent\n")
+        (main_repo / "benchmark.py").write_text(
+            "import json, os, pathlib\n"
+            "p = pathlib.Path(os.environ.get('EVO_RESULT_PATH') or 'result.json')\n"
+            "p.parent.mkdir(parents=True, exist_ok=True)\n"
+            "p.write_text(json.dumps({'tasks': {'t1': 0.9}, 'score': 0.9}))\n"
+            "print('score=0.9')\n"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=main_repo, check=True)
+        subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"],
+            cwd=main_repo, check=True,
+        )
+
+        slots: list[Path] = []
+        for i in range(2):
+            slot = td / f"slot-{i}"
+            subprocess.run(
+                ["git", "clone", "-q", str(main_repo), str(slot)],
+                check=True,
+            )
+            subprocess.run(["git", "config", "user.email", "t@t"], cwd=slot, check=True)
+            subprocess.run(["git", "config", "user.name", "T"], cwd=slot, check=True)
+            subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=slot, check=True)
+            slots.append(slot)
+        return main_repo, slots
+
+    def test_pool_commit_anchored_in_main_repo(self):
+        """After a pool experiment commits, refs/evo-anchor/<run>/<exp>
+        in the main repo must point at a commit the main repo can resolve."""
+        with tempfile.TemporaryDirectory() as d:
+            td = Path(d)
+            main_repo, slots = self._setup_pool_workspace(td)
+            self._dashboard_roots.append(main_repo)
+
+            slot_arg = ",".join(str(s) for s in slots)
+            r = self._run_evo(main_repo, [
+                "init", "--target", "agent.py",
+                "--benchmark", "python benchmark.py",
+                "--metric", "max", "--host", "generic",
+            ])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = self._run_evo(main_repo, [
+                "config", "backend", "pool", "--workspaces", slot_arg,
+            ])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = self._run_evo(main_repo, ["new", "--parent", "root", "-m", "test"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+            # Edit + run inside the slot.
+            from evo import core
+            graph = core.load_graph(main_repo)
+            exp_id = next(nid for nid in graph["nodes"] if nid != "root")
+            wt = Path(graph["nodes"][exp_id]["worktree"])
+            (wt / "agent.py").write_text("# agent\n# pool experiment edit\n")
+
+            r = self._run_evo(main_repo, ["run", exp_id])
+            self.assertEqual(r.returncode, 0, f"run: {r.stderr}\n{r.stdout}")
+            self.assertIn("COMMITTED", r.stdout, f"unexpected: {r.stdout}")
+
+            # Anchor must exist in MAIN repo and be resolvable to a real
+            # commit (the main repo must have the objects, not just the ref).
+            anchor = subprocess.run(
+                ["git", "rev-parse", f"refs/evo-anchor/run_0000/{exp_id}"],
+                cwd=main_repo, check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(anchor.returncode, 0,
+                             f"anchor missing in main repo: {anchor.stderr}")
+            commit_hash = anchor.stdout.strip()
+            cat = subprocess.run(
+                ["git", "cat-file", "-e", commit_hash],
+                cwd=main_repo, check=False, capture_output=True,
+            )
+            self.assertEqual(
+                cat.returncode, 0,
+                f"anchor points at commit {commit_hash} but main repo "
+                f"doesn't have the object — Stage 4 mirror didn't work"
+            )
+
+    def test_pool_commit_survives_main_repo_gc(self):
+        """The full point of the anchor: even if every slot were wiped and
+        main-repo `git gc --prune=now` ran, the anchor keeps the commit
+        alive. Simulate by running gc and verifying the commit is still
+        reachable."""
+        with tempfile.TemporaryDirectory() as d:
+            td = Path(d)
+            main_repo, slots = self._setup_pool_workspace(td)
+            self._dashboard_roots.append(main_repo)
+
+            slot_arg = ",".join(str(s) for s in slots)
+            self._run_evo(main_repo, [
+                "init", "--target", "agent.py",
+                "--benchmark", "python benchmark.py",
+                "--metric", "max", "--host", "generic",
+            ])
+            self._run_evo(main_repo, [
+                "config", "backend", "pool", "--workspaces", slot_arg,
+            ])
+            self._run_evo(main_repo, ["new", "--parent", "root", "-m", "test"])
+
+            from evo import core
+            graph = core.load_graph(main_repo)
+            exp_id = next(nid for nid in graph["nodes"] if nid != "root")
+            wt = Path(graph["nodes"][exp_id]["worktree"])
+            (wt / "agent.py").write_text("# agent\n# pool gc test\n")
+
+            r = self._run_evo(main_repo, ["run", exp_id])
+            self.assertIn("COMMITTED", r.stdout, r.stdout)
+
+            # Resolve anchor → commit hash
+            commit = subprocess.run(
+                ["git", "rev-parse", f"refs/evo-anchor/run_0000/{exp_id}"],
+                cwd=main_repo, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+
+            # Run aggressive gc in MAIN REPO (not the slot)
+            subprocess.run(
+                ["git", "reflog", "expire", "--expire=now", "--all"],
+                cwd=main_repo, check=True,
+            )
+            subprocess.run(
+                ["git", "gc", "--prune=now", "--quiet"],
+                cwd=main_repo, check=True,
+            )
+
+            # Commit must still be reachable in the main repo
+            cat = subprocess.run(
+                ["git", "cat-file", "-e", commit],
+                cwd=main_repo, check=False, capture_output=True,
+            )
+            self.assertEqual(
+                cat.returncode, 0,
+                f"anchor failed to keep commit {commit[:8]} alive across "
+                f"main-repo `git gc --prune=now`"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

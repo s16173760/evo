@@ -2411,13 +2411,32 @@ def _cmd_run_impl(
                         bundle_dir=bundle_dir,
                     )
 
-            # Anchor the commit via `refs/evo-anchor/<run>/<exp>` so it survives
-            # `git branch -D` (which `evo discard` runs). Worktree commits are
-            # already in the main repo; remote commits were just fetched
-            # above. Pool deferred — pool commits live in slot git stores.
+            # For pool: fetch the commit from the slot's git store into the
+            # main repo. Pool commits otherwise live only in slot directories
+            # and aren't reachable from `cwd=root` for anchor refs, recovery,
+            # or cross-slot child allocation.
             if commit:
                 backend_kind = config.get("execution_backend") or "worktree"
-                if backend_kind in ("worktree", "remote"):
+                if backend_kind == "pool":
+                    base_commit = (
+                        parent_ref if node["parent"] == "root" else (
+                            _read_node(root, node["parent"]).get("commit") or parent_ref
+                        )
+                    )
+                    if commit != base_commit:
+                        subprocess.run(
+                            ["git", "-c", "protocol.file.allow=always",
+                             "fetch", str(worktree), commit],
+                            cwd=root, check=True, capture_output=True, text=True,
+                        )
+
+                # Anchor the commit via `refs/evo-anchor/<run>/<exp>` so it
+                # survives `git branch -D` (which `evo discard` runs). At this
+                # point the commit is in the main repo for all three backends:
+                # worktree commits are made there directly; remote commits
+                # were fetched above via fetch_commit_from_sandbox; pool
+                # commits were just fetched from the slot.
+                if backend_kind in ("worktree", "remote", "pool"):
                     meta = _load_meta(root)
                     run_id = meta.get("active", "run_0000")
                     _anchor_commit_ref(root, run_id, args.exp_id, commit)
