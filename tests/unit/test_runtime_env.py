@@ -40,8 +40,26 @@ def shutdown_dashboard(root: Path) -> None:
         return
     try:
         pid = int(pid_file.read_text(encoding="utf-8").strip())
-        os.kill(pid, signal.SIGTERM)
     except (OSError, ValueError):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    # Wait briefly for the dashboard to exit and release its port. Without
+    # this, the next test in the same suite can race on bind() before the
+    # OS has freed the socket.
+    import time
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    # Still alive after 1s; force-kill.
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
         pass
 
 

@@ -10,10 +10,16 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+
+# Use the interpreter that's running pytest. Bare "python" isn't on PATH on
+# macOS Homebrew (only "python3"); sys.executable always resolves.
+PY = sys.executable
 
 
 def _init_git_repo(root: Path) -> str:
@@ -592,7 +598,7 @@ class TestEvoRunWritesAnchorRef(unittest.TestCase):
             # init evo
             r = self._run_evo(root, [
                 "init", "--target", "agent.py",
-                "--benchmark", "python benchmark.py",
+                "--benchmark", f"{PY} benchmark.py",
                 "--metric", "max", "--host", "generic",
             ])
             self.assertEqual(r.returncode, 0, f"init failed: {r.stderr}")
@@ -699,7 +705,7 @@ class TestNewAfterRestoreWorks(unittest.TestCase):
 
             r = self._run_evo(root, [
                 "init", "--target", "agent.py",
-                "--benchmark", "python benchmark.py",
+                "--benchmark", f"{PY} benchmark.py",
                 "--metric", "max", "--host", "generic",
             ])
             self.assertEqual(r.returncode, 0, f"init: {r.stderr}")
@@ -897,7 +903,7 @@ class TestPoolBackendAnchor(unittest.TestCase):
             slot_arg = ",".join(str(s) for s in slots)
             r = self._run_evo(main_repo, [
                 "init", "--target", "agent.py",
-                "--benchmark", "python benchmark.py",
+                "--benchmark", f"{PY} benchmark.py",
                 "--metric", "max", "--host", "generic",
             ])
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -951,7 +957,7 @@ class TestPoolBackendAnchor(unittest.TestCase):
             slot_arg = ",".join(str(s) for s in slots)
             self._run_evo(main_repo, [
                 "init", "--target", "agent.py",
-                "--benchmark", "python benchmark.py",
+                "--benchmark", f"{PY} benchmark.py",
                 "--metric", "max", "--host", "generic",
             ])
             self._run_evo(main_repo, [
