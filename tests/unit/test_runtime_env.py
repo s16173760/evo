@@ -11,7 +11,7 @@ import pytest
 from evo.core import parse_dotenv, resolve_runtime_env, runtime_env_summary
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "evo"
 
 

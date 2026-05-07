@@ -326,6 +326,10 @@ class TestDashboardFrontierStrategy(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.get_json())
         self.assertEqual(res.get_json()["runtime_env"]["runtime_variable_previews"], {})
 
+    @unittest.skipUnless(
+        __import__("importlib.util").util.find_spec("modal"),
+        "modal SDK not installed; install evo-hq-cli[modal] to run",
+    )
     def test_execution_settings_post_accepts_modal_gpu_and_pool_size(self):
         res = self.client.post(
             "/api/workspace/execution",

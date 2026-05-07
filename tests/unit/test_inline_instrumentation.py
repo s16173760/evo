@@ -22,8 +22,8 @@ import unittest
 from pathlib import Path
 
 HELPER_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "skills" / "discover" / "references" / "inline_instrumentation.py"
+    Path(__file__).resolve().parents[2]
+    / "plugins" / "evo" / "skills" / "discover" / "references" / "inline_instrumentation.py"
 )
 
 

@@ -563,7 +563,7 @@ class TestEvoRunWritesAnchorRef(unittest.TestCase):
              *args],
             cwd=root, check=False, capture_output=True, text=True,
             env={**__import__("os").environ, "PYTHONPATH": str(
-                Path(__file__).resolve().parent.parent / "src"
+                Path(__file__).resolve().parents[2] / "plugins" / "evo" / "src"
             )},
         )
 
@@ -672,7 +672,7 @@ class TestNewAfterRestoreWorks(unittest.TestCase):
              *args],
             cwd=root, check=False, capture_output=True, text=True,
             env={**__import__("os").environ, "PYTHONPATH": str(
-                Path(__file__).resolve().parent.parent / "src"
+                Path(__file__).resolve().parents[2] / "plugins" / "evo" / "src"
             )},
         )
 
@@ -833,7 +833,7 @@ class TestPoolBackendAnchor(unittest.TestCase):
              *args],
             cwd=root, check=False, capture_output=True, text=True,
             env={**__import__("os").environ, "PYTHONPATH": str(
-                Path(__file__).resolve().parent.parent / "src"
+                Path(__file__).resolve().parents[2] / "plugins" / "evo" / "src"
             )},
         )
 
