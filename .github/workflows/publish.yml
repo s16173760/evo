@@ -39,6 +39,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Configure git author (some tests `git commit`)
+        run: |
+          git config --global user.email "ci@evo.test"
+          git config --global user.name "evo-ci"
       - name: Verify all 7 version pins agree
         run: python3 scripts/check_versions.py
       - name: Verify tag matches package version
