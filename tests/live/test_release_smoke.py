@@ -569,25 +569,26 @@ def _drive_smoke(
     # nodes between run_0000 and run_0001. The directive ends up wherever
     # the agent's hook walks to find .evo/, the best score may live in a
     # later run, etc. Pinning to one run_dir gives stale assertions.
-    n_experiments = int(h.run(
-        f"find {ws_root}/run_*/experiments -mindepth 1 -maxdepth 1 -type d "
-        f"2>/dev/null | wc -l", must_succeed=False,
-    ).strip())
-    # The fixture prompt specifies 2 subagents × 2 rounds = 4 experiments.
-    # >= (not ==) tolerates the rare case where a subagent's first evo run
-    # fails inside budget and the same brief produces a sibling experiment.
-    # Anything < 4 means round 2 didn't fire — the actual regression we care
-    # about — and proves the mid-run inject + multi-round contract is broken.
-    if n_experiments < 4:
-        # On failure, dump the agent log and experiment dir for diagnosis.
-        h.run("echo '--- /tmp/agent.log (last 200 lines) ---'; "
-              "tail -200 /tmp/agent.log 2>&1 || echo '(no agent log)'",
-              must_succeed=False, timeout=10)
-        h.run(f"echo '--- experiment outcomes (all runs) ---'; "
-              f"for f in {ws_root}/run_*/experiments/exp_*/attempts/*/outcome.json; do "
-              f"  echo \"=== $f ===\"; cat \"$f\" 2>/dev/null | head -20; "
-              f"done",
-              must_succeed=False, timeout=10)
+    #
+    # The assertions check directive *effect*, not experiment *count*:
+    #   - consumed_by  → directive offset advanced in ≥1 session
+    #                    (drain mechanism worked)
+    #   - tag_count    → the unique marker the directive embedded
+    #                    ('_DIRECTIVE_TAG = "EVO_DIRECTIVE_<uuid>"')
+    #                    is in a committed target.py (proves the agent
+    #                    saw the directive content AND propagated it
+    #                    into Experiment D's brief, not just that some
+    #                    number of experiments happened)
+    #   - ratio > 50   → best committed score reflects the directive's
+    #                    O(n) hashmap impl (round-1 strategies cap ~10×)
+    #
+    # We dropped the `n_experiments >= 4` count check — it was a brittle
+    # proxy ("agent should run 2 rounds × 2 subagents"). Real LLMs
+    # consolidate, skip, or merge dispatches based on their own
+    # reasoning. A count assertion misfires when the agent skips D for
+    # model-specific reasons; the marker-and-score assertions misfire
+    # *precisely on the thing we care about* — whether the directive's
+    # content actually shaped the agent's work.
     if os.environ.get("EVO_DUMP_AGENT_LOG") == "1":
         # Surface evidence that the directive content reached the LLM
         # transcript (not just the inject queue). Greps + dumps the
@@ -602,10 +603,6 @@ def _drive_smoke(
               "wc -l /tmp/agent.log; "
               "echo; tail -100 /tmp/agent.log",
               must_succeed=False, timeout=10)
-    assert n_experiments >= 4, (
-        f"[{host}] expected ≥4 experiments (2 subagents × 2 rounds), got "
-        f"{n_experiments} — round 2 likely didn't fire"
-    )
 
     consumed_by = _verify_directive_consumed(h, ws_root, directive_id)
     assert consumed_by >= 1, (
