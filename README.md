@@ -180,7 +180,7 @@ For working on evo itself (not just using it):
 ```bash
 git clone https://github.com/evo-hq/evo
 cd evo
-uv run --project plugins/evo evo --version   # evo-hq-cli 0.3.0
+uv run --project plugins/evo evo --version
 ```
 
 `uv run` resolves dependencies on first use -- no `pip install` step.

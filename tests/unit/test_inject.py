@@ -238,7 +238,7 @@ class TestRegistry(unittest.TestCase):
     def test_detect_session_returns_none_when_no_env(self):
         env_vars = [v for _, v in [
             ("claude-code", "CLAUDE_CODE_SESSION_ID"),
-            ("codex", "CODEX_SESSION_ID"),
+            ("codex", "CODEX_THREAD_ID"),
             ("hermes", "HERMES_SESSION_ID"),
             ("opencode", "OPENCODE_SESSION_ID"),
         ]]
@@ -253,22 +253,22 @@ class TestRegistry(unittest.TestCase):
     def test_detect_session_returns_claude_code(self):
         with patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "sess_abc"}, clear=False):
             # remove competing vars
-            for _, v in [("codex", "CODEX_SESSION_ID"), ("hermes", "HERMES_SESSION_ID"), ("opencode", "OPENCODE_SESSION_ID")]:
+            for _, v in [("codex", "CODEX_THREAD_ID"), ("hermes", "HERMES_SESSION_ID"), ("opencode", "OPENCODE_SESSION_ID")]:
                 os.environ.pop(v, None)
             result = detect_session()
         assert result == ("claude-code", "sess_abc")
 
     def test_detect_session_returns_codex(self):
-        with patch.dict(os.environ, {"CODEX_SESSION_ID": "codex_sess"}, clear=False):
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": "codex_thread"}, clear=False):
             os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
             os.environ.pop("HERMES_SESSION_ID", None)
             os.environ.pop("OPENCODE_SESSION_ID", None)
             result = detect_session()
-        assert result == ("codex", "codex_sess")
+        assert result == ("codex", "codex_thread")
 
     def test_auto_register_from_env_registers_when_session_set(self):
         with patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "env_sess"}, clear=False):
-            for _, v in [("codex", "CODEX_SESSION_ID"), ("hermes", "HERMES_SESSION_ID"), ("opencode", "OPENCODE_SESSION_ID")]:
+            for _, v in [("codex", "CODEX_THREAD_ID"), ("hermes", "HERMES_SESSION_ID"), ("opencode", "OPENCODE_SESSION_ID")]:
                 os.environ.pop(v, None)
             os.environ.pop("EVO_EXP_ID", None)
             auto_register_from_env(self.root)
@@ -279,7 +279,7 @@ class TestRegistry(unittest.TestCase):
             "CLAUDE_CODE_SESSION_ID": "env_sess2",
             "EVO_EXP_ID": "exp_0007",
         }, clear=False):
-            for _, v in [("codex", "CODEX_SESSION_ID"), ("hermes", "HERMES_SESSION_ID"), ("opencode", "OPENCODE_SESSION_ID")]:
+            for _, v in [("codex", "CODEX_THREAD_ID"), ("hermes", "HERMES_SESSION_ID"), ("opencode", "OPENCODE_SESSION_ID")]:
                 os.environ.pop(v, None)
             auto_register_from_env(self.root)
         data = json.loads(session_file(self.root, "env_sess2").read_text())
@@ -288,7 +288,7 @@ class TestRegistry(unittest.TestCase):
     def test_auto_register_noop_when_no_session_env(self):
         for _, v in [
             ("claude-code", "CLAUDE_CODE_SESSION_ID"),
-            ("codex", "CODEX_SESSION_ID"),
+            ("codex", "CODEX_THREAD_ID"),
             ("hermes", "HERMES_SESSION_ID"),
             ("opencode", "OPENCODE_SESSION_ID"),
         ]:
