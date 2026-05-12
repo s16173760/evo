@@ -1,6 +1,16 @@
 Use the `optimize` skill to explore optimizations for `target.py` in this
 repository.
 
+**Hard requirements** (do not deviate):
+
+- Every experiment MUST be committed through the evo pipeline using the
+  skill's documented commands (`evo new`, `evo run <exp_id>`, etc.).
+- Do not create separate `target_A.py` / `target_B.py` / etc. files in
+  the workspace root. Do not write your own benchmark harness or invoke
+  `python bench.py` directly. Use evo's worktree + `evo run` flow only.
+- Each subagent edits `target.py` inside its own evo-managed worktree
+  and reports back through evo's outcome.json.
+
 **Round 1**: launch exactly 2 experiments in parallel, each trying ONE of
 these approaches (do not deviate, do not pick a different algorithm):
 

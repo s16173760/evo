@@ -267,6 +267,19 @@ class _Harness:
             f">/dev/null",
             timeout=300,
         )
+        # Some models (notably gpt-5 driving opencode) ignore the
+        # documented `evo run` workflow and try to drive experiments by
+        # hand with `python bench.py`. Ubuntu only ships `python3`, not
+        # `python`, so the freelance call dies and the agent exits before
+        # any commit. Symlink so model-side freelancing degrades to "wrong
+        # workflow but at least runs" instead of "crashes immediately"
+        # — the marker-tag assertion still catches the real "agent didn't
+        # follow the directive" case.
+        self.run(
+            f"{self._sudo}ln -sf $(command -v python3) /usr/local/bin/python "
+            f"2>/dev/null || true",
+            timeout=10,
+        )
         self.run("curl -LsSf https://astral.sh/uv/install.sh | sh > /tmp/uv.log 2>&1",
                  timeout=120)
 
@@ -688,9 +701,9 @@ def test_opencode(sandbox_4g):
     are all loaded (observed: opencode dies with exit 137 after the
     DB migration, no further output).
     """
-    openai_key = os.environ.get("OPENAI_API_KEY")
-    if not openai_key:
-        pytest.skip("OPENAI_API_KEY required for opencode")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not anthropic_key:
+        pytest.skip("ANTHROPIC_API_KEY required for opencode")
 
     # evo-test-4g template doesn't ship nodejs; opencode itself is a static
     # binary but `npx skills add` (used to install skills) needs Node.
@@ -724,16 +737,19 @@ def test_opencode(sandbox_4g):
         ],
         drive_cmd=(
             "export PATH=$HOME/.local/bin:$HOME/.opencode/bin:$PATH; "
-            # gpt-4.1-mini on opencode misinterprets the "spawn N subagents"
-            # line in optimize SKILL.md as `task(type="optimize", ...)` —
-            # opencode rejects that ("Unknown agent type: optimize") and
-            # the agent falls back to running experiments inline (no
-            # `evo run`). Switching to gpt-5 since it follows skills more
-            # strictly on codex; verifying same on opencode.
-            f"nohup opencode run --model openai/gpt-5 {prompt} "
-            "> /tmp/agent.log 2>&1 & echo $! > /tmp/agent.pid"
+            # opencode + gpt-5 reads the optimize skill but doesn't always
+            # implement the directive's algorithm correctly — gpt-5
+            # produces a "single-pass dict" labeled as O(n) that actually
+            # runs at O(n²) speed (verified: best/baseline ratio 1.0x on
+            # opencode-gpt-5, vs 1014x on codex-gpt-5 — same model,
+            # different host harness). claude-sonnet-4-5 follows the
+            # exact algorithm spec from the directive (consistent with
+            # the other Claude-driven hosts: claude_code, hermes,
+            # openclaw — all sonnet, all pass).
+            f"nohup opencode run --model anthropic/claude-sonnet-4-5 "
+            f"{prompt} > /tmp/agent.log 2>&1 & echo $! > /tmp/agent.pid"
         ),
-        env_keys={"OPENAI_API_KEY": openai_key},
+        env_keys={"ANTHROPIC_API_KEY": anthropic_key},
     )
 
 
