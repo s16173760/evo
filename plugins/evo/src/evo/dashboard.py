@@ -302,14 +302,24 @@ def _clean_provider_config(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _azure_cli_logged_in() -> bool:
-    if shutil.which("az") is None:
+    az = shutil.which("az")
+    if az is None:
         return False
-    proc = subprocess.run(
-        ["az", "account", "show"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    # Use the resolved path: on Windows, `az` ships as `az.cmd` and a bare
+    # `["az", ...]` call goes through CreateProcess which only matches
+    # `az.exe`. shutil.which finds the .cmd; passing it directly works.
+    # Still wrap in try/except so any other launcher failure (PATH races,
+    # broken shims) just reports "not logged in" rather than 500ing the
+    # /api/workspace endpoint.
+    try:
+        proc = subprocess.run(
+            [az, "account", "show"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, FileNotFoundError):
+        return False
     return proc.returncode == 0
 
 
