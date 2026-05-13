@@ -604,7 +604,7 @@ def parse_diff_patch(root: Path, exp_id: str, attempt: int) -> dict[str, Any] | 
         if line.startswith("diff --git"):
             parts = line.split()
             if len(parts) >= 4:
-                files.append(parts[3].lstrip("b/"))
+                files.append(parts[3].removeprefix("b/"))
         elif line.startswith("+") and not line.startswith("+++"):
             added += 1
         elif line.startswith("-") and not line.startswith("---"):
