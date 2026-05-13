@@ -677,6 +677,11 @@ class TestCmdDirect(unittest.TestCase):
         events = queue.read_events_after(workspace_events_path(self.root), None)
         assert events == []
 
+    @unittest.skipIf(
+        sys.platform == "win32",
+        "POSIX-only: TemporaryDirectory cleanup recurses while a git repo "
+        "still holds file handles on Windows (shutil.rmtree onerror loop)",
+    )
     def test_error_when_no_evo_dir(self):
         # chdir to a tmpdir without .evo
         with tempfile.TemporaryDirectory() as other:

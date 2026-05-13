@@ -240,9 +240,12 @@ def render_explore_prompt(
         )
     else:
         block = "\n"
+    # as_posix() so the agent receives forward-slash paths on every
+    # platform. Backslashes need escaping in JSON-bound tool args and
+    # would be wrong in the read-protocol path baked into the prompt.
     return EXPLORE_USER_PROMPT_TEMPLATE.format(
-        skill_path=str(skill_path),
-        worktree_path=str(worktree_path),
+        skill_path=Path(skill_path).as_posix(),
+        worktree_path=Path(worktree_path).as_posix(),
         parent_id=parent_id,
         explore_context_block=block,
     )
@@ -307,18 +310,21 @@ def render_execute_prompt(
     that an auto-compacted parent transcript doesn't leave the child
     without the worker protocol.
     """
+    # Paths in agent prompts go through as_posix() — see render_explore_prompt
+    # for the reasoning. The agent makes tool calls with these paths and
+    # backslash escaping is fragile across the JSON boundary.
     if lineage:
         return LINEAGE_EXECUTE_USER_PROMPT_TEMPLATE.format(
             exp_id=exp_id,
-            worktree_path=str(worktree_path),
+            worktree_path=Path(worktree_path).as_posix(),
             parent_id=parent_id,
             brief=brief.strip(),
             budget=budget,
-            protocol_path=str(subagent_skill_path()),
+            protocol_path=Path(subagent_skill_path()).as_posix(),
         )
     return EXECUTE_USER_PROMPT_TEMPLATE.format(
         exp_id=exp_id,
-        worktree_path=str(worktree_path),
+        worktree_path=Path(worktree_path).as_posix(),
         parent_id=parent_id,
         brief=brief.strip(),
         budget=budget,

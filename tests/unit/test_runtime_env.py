@@ -4,11 +4,23 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from evo.core import parse_dotenv, resolve_runtime_env, runtime_env_summary
+
+# POSIX-only: the dashboard cleanup fixture sends SIGTERM/SIGKILL (line ~46
+# below). Windows doesn't ship signal.SIGKILL, and the kill-wait dance via
+# os.kill(pid, 0) has different semantics. The subprocess CLI tests below
+# also depend on signal-based teardown to free the dashboard's port between
+# tests, which doesn't work cleanly on Windows.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX-only: relies on signal.SIGKILL + os.kill semantics for "
+    "dashboard cleanup between subprocess CLI tests",
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

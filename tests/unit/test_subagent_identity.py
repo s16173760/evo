@@ -128,6 +128,11 @@ class HermesSubagentIdentityTests(unittest.TestCase):
         self.assertIsNone(queue.read_offset(self.root, "sub", "workspace"))
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "POSIX-only: invokes a bash hot-path script under tempdir teardown that "
+    "Windows can't reliably clean (held git/inject file handles)",
+)
 class CodexHotPathSubagentIdentityTests(unittest.TestCase):
     """The bash hot-path script auto-registers per session_id from
     stdin. Distinct subagent ThreadIds in two PreToolUse fires must

@@ -553,6 +553,11 @@ class TestRestore(unittest.TestCase):
                 self._run_restore(root, "exp_0001")
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "POSIX-only: TemporaryDirectory cleanup recurses while git index/pack "
+    "files are still held by background processes on Windows",
+)
 class TestEvoRunWritesAnchorRef(unittest.TestCase):
     """Stage 2 integration: a real `evo init` + `evo new` + `evo run` cycle
     on the worktree backend must write `refs/evo-anchor/<run>/<exp>` so the commit
@@ -646,6 +651,11 @@ class TestEvoRunWritesAnchorRef(unittest.TestCase):
             self.assertEqual(ref.stdout.strip(), commit)
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "POSIX-only: TemporaryDirectory cleanup recurses while git index/pack "
+    "files are still held by background processes on Windows",
+)
 class TestNewAfterRestoreWorks(unittest.TestCase):
     """Stage 3c integration: after `evo restore` un-discards a node, you can
     actually allocate a child via `evo new --parent <restored_id>`. Proves
@@ -824,6 +834,11 @@ class TestLegacyAnchorFallback(unittest.TestCase):
             self.assertEqual(br.stdout.strip(), exp_commit)
 
 
+@unittest.skipIf(
+    sys.platform == "win32",
+    "POSIX-only: TemporaryDirectory cleanup recurses while git index/pack "
+    "files are still held by background processes on Windows",
+)
 class TestPoolBackendAnchor(unittest.TestCase):
     """Stage 4: pool-committed nodes must mirror their commit into the main
     repo at run-time, write `refs/evo-anchor/<run>/<exp>` like worktree+remote

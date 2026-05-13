@@ -1390,10 +1390,13 @@ def _remote_stream_journals(root: Path, exp_id: str, attempt: int) -> list[dict]
         if not isinstance(payload, dict):
             continue
         payload = dict(payload)
+        # Forward-slash form so the journal_path field stays portable across
+        # Windows/POSIX; downstream consumers (dashboard, scratchpad) treat
+        # it as a string and shouldn't have to platform-detect separators.
         try:
-            payload["journal_path"] = str(path.relative_to(root))
+            payload["journal_path"] = path.relative_to(root).as_posix()
         except ValueError:
-            payload["journal_path"] = str(path)
+            payload["journal_path"] = Path(path).as_posix()
         journals.append(payload)
     return journals
 
