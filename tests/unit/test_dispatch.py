@@ -292,6 +292,11 @@ def test_explorer_record_path_and_dir(workspace: Path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX-only: _is_pid_alive uses os.kill(pid, 0) semantics that "
+    "don't apply on Windows; the post-wait reap window also behaves differently",
+)
 def test_is_pid_alive_with_real_subprocess():
     """Spawn a real cheap subprocess; verify _is_pid_alive flips correctly."""
     from evo.cli import _is_pid_alive

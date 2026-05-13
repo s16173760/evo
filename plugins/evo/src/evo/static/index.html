@@ -3,124 +3,165 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>evo</title>
+  <title>evo : autoresearch</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2"></script>
-  <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
-  <!-- Top bar -->
+  <!-- Top bar: logo · run · best-score · project · settings.
+       The running-count lives in the filter-bar `active N` chip — no need
+       to repeat it here. -->
   <header id="topbar">
     <svg class="logo" viewBox="80 70 620 210" xmlns="http://www.w3.org/2000/svg" aria-label="evo">
       <text x="100" y="245" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="280" letter-spacing="-10" fill="currentColor">e</text>
       <text x="290" y="245" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="280" letter-spacing="-10" fill="currentColor">v</text>
       <circle cx="600" cy="170" r="84" fill="#FF6A2A"/>
     </svg>
-    <div class="divider"></div>
-    <span id="target-file" class="target"></span>
-    <div id="status-pill" class="pill pill-idle">
-      <span class="dot"></span>
-      <span id="status-text">connecting</span>
-    </div>
-    <div class="spacer"></div>
     <div id="run-switcher" class="run-switcher"></div>
-    <button id="strategy-btn" class="btn-ghost" onclick="openStrategy()" title="Frontier selection strategy">strategy</button>
-    <span id="meta-info" class="meta"></span>
+    <div class="stat-strip">
+      <div class="stat-block">
+        <div class="stat-label">Best Score</div>
+        <div class="stat-row">
+          <span id="stat-best-value" class="stat-value">--</span>
+          <span id="stat-best-delta" class="stat-delta"></span>
+        </div>
+        <div id="stat-best-sub" class="stat-sub"></div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-block">
+        <div class="stat-label">Experiments</div>
+        <div class="stat-row">
+          <span id="stat-exp-value" class="stat-value">0</span>
+        </div>
+        <div id="stat-exp-sub" class="stat-sub"></div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-block">
+        <div class="stat-label">Frontier</div>
+        <div class="stat-row">
+          <span id="stat-frontier-value" class="stat-value">0</span>
+        </div>
+        <div class="stat-sub">open branches</div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-block">
+        <div class="stat-label">Active</div>
+        <div class="stat-row">
+          <span id="stat-active-value" class="stat-value stat-active">0</span>
+        </div>
+        <div class="stat-sub">running now</div>
+      </div>
+    </div>
+    <span id="target-file" class="target" onclick="toggleWorkspacePopover(event)" title="Workspace details"></span>
+    <div class="spacer"></div>
+    <button id="settings-btn" class="btn-ghost" onclick="openSettings()" title="Workspace and execution settings">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+      <span>settings</span>
+    </button>
   </header>
 
-  <!-- Hero metrics -->
-  <section id="hero">
-    <div class="hero-score">
-      <span class="hero-label">BEST SCORE</span>
-      <div class="hero-value-row">
-        <span id="best-score" class="hero-value">--</span>
-        <span id="score-delta" class="hero-delta"></span>
-      </div>
-      <span id="baseline-info" class="hero-sub"></span>
-    </div>
-    <div class="hero-stats">
-      <div class="hero-stat">
-        <span class="hero-label">EXPERIMENTS</span>
-        <span id="total-exp" class="hero-num">--</span>
-        <div id="exp-breakdown" class="hero-breakdown"></div>
-      </div>
-      <div class="hero-stat">
-        <span class="hero-label">KEEP RATE</span>
-        <span id="keep-rate" class="hero-num">--</span>
-        <span id="keep-detail" class="hero-sub"></span>
-      </div>
-      <div class="hero-stat">
-        <span class="hero-label">FRONTIER</span>
-        <span id="frontier-count" class="hero-num">--</span>
-        <span class="hero-sub">open branches</span>
-      </div>
-      <div class="hero-stat">
-        <span class="hero-label">ACTIVE</span>
-        <span id="active-count" class="hero-num">--</span>
-        <span class="hero-sub">running now</span>
-      </div>
-    </div>
-  </section>
+  <!-- 3-column main area -->
+  <main id="main-area">
+    <!-- Center: timeline + scatter strip -->
+    <section id="center-col">
+      <section id="timeline-section">
+        <div id="timeline-axis"></div>
+        <div id="timeline-rows" class="timeline-rows"></div>
+        <div id="timeline-empty" class="timeline-empty hidden">No experiments yet — waiting for the agent to start a run.</div>
+      </section>
 
-  <!-- Charts row -->
-  <section id="charts">
-    <div id="chart-panel" class="panel">
-      <span class="panel-title">Score Progression</span>
-      <div class="chart-container">
-        <canvas id="score-chart"></canvas>
-      </div>
-    </div>
-    <div id="tree-panel" class="panel">
-      <span class="panel-title">Experiment Tree</span>
-      <div id="tree-container" class="tree-container">
-        <svg id="tree-svg"></svg>
-      </div>
-    </div>
-  </section>
+      <!-- Score-over-time chart, docked below the canvas. Header click
+           collapses the strip; top edge is the vertical resize handle.
+           Collapsed state persists to localStorage. -->
+      <section id="scatter-strip" class="scatter-strip">
+        <span id="scatter-resize-top" class="scatter-resize-top" title="Drag to resize"></span>
+        <div class="scatter-strip-head" id="scatter-toggle" title="Click to collapse / expand">
+          <span class="scatter-toggle-caret">▾</span>
+          <span class="scatter-strip-title">score over time</span>
+          <span id="scatter-best" class="scatter-best-label"></span>
+        </div>
+        <div id="scatter-plot" class="scatter-plot"></div>
+      </section>
+    </section>
 
-  <!-- Experiment table -->
-  <section id="table-section">
-    <div class="table-header">
-      <span class="panel-title">Experiments</span>
-      <div class="spacer"></div>
-      <div id="table-filters" class="filters"></div>
-    </div>
-    <div class="table-head-row">
-      <span class="col-id">ID</span>
-      <span class="col-score">SCORE</span>
-      <span class="col-status">STATUS</span>
-      <span class="col-parent">PARENT</span>
-      <span class="col-hyp">HYPOTHESIS</span>
-      <span class="col-tasks">TASKS</span>
-      <span class="col-time">TIME</span>
-    </div>
-    <div id="table-body"></div>
-    <div id="table-pager" class="table-pager hidden"></div>
-  </section>
-
-  <!-- Drawer overlay -->
-  <div id="drawer-overlay" class="drawer-overlay hidden" onclick="closeDrawer()">
-    <div id="drawer" class="drawer" onclick="event.stopPropagation()">
-      <div id="drawer-content"></div>
-    </div>
-  </div>
+    <!-- Right rail: detail panel (opens on selection) -->
+    <aside id="sidebar" class="sidebar hidden">
+      <div id="sidebar-content"></div>
+    </aside>
+  </main>
 
   <!-- Info popover (shared) -->
   <div id="tip-popover" class="tip-popover hidden"></div>
 
-  <!-- Frontier strategy modal -->
-  <div id="strategy-overlay" class="modal-overlay hidden" onclick="closeStrategy()">
-    <div class="modal" onclick="event.stopPropagation()">
+  <!-- Workspace popover (read-only project facts; opens from the topbar). -->
+  <div id="workspace-popover" class="workspace-popover hidden"></div>
+
+  <!-- Settings modal -->
+  <div id="settings-overlay" class="modal-overlay hidden" onclick="closeSettings()">
+    <div class="modal settings-modal" onclick="event.stopPropagation()">
       <div class="modal-header">
-        <span class="modal-title">Frontier selection strategy</span>
+        <span class="modal-title">Settings</span>
         <div class="spacer"></div>
-        <span class="close-btn" onclick="closeStrategy()">&times;</span>
+        <span class="close-btn" onclick="closeSettings()">&times;</span>
       </div>
-      <div id="strategy-body" class="modal-body"></div>
+      <div id="settings-body" class="modal-body settings-body"></div>
+      <div class="modal-footer settings-footer">
+        <span id="settings-footer-status" class="settings-footer-status"></span>
+        <span class="spacer"></span>
+        <button class="btn-ghost" type="button" onclick="closeSettings()">Cancel</button>
+        <button id="settings-footer-save" class="btn-spawn" type="button" onclick="submitActiveSettings()" disabled>Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prune confirm modal -->
+  <div id="prune-overlay" class="modal-overlay hidden" onclick="closePruneModal(event)">
+    <div class="modal modal-confirm" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">Prune <span id="prune-target-id" class="mono"></span></span>
+        <div class="spacer"></div>
+        <span class="close-btn" onclick="closePruneModal()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <p class="modal-blurb">Removes the node from the frontier so the planner stops branching from it. The commit is preserved.</p>
+        <label class="modal-field">
+          <span class="modal-field-label">Reason <span class="modal-field-req">required</span></span>
+          <textarea id="prune-reason" rows="3" placeholder="why is this branch exhausted?"></textarea>
+        </label>
+        <div id="prune-error" class="modal-error hidden"></div>
+        <div class="modal-actions">
+          <button class="btn-ghost" onclick="closePruneModal()">Cancel</button>
+          <button id="prune-submit" class="btn-prune" onclick="submitPrune()">Prune</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Spawn / retry modal. Mode (spawn|retry) swaps title, placeholder, and
+       submit label in JS; the form structure is the same. -->
+  <div id="spawn-overlay" class="modal-overlay hidden" onclick="closeSpawnModal(event)">
+    <div class="modal modal-confirm" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title"><span id="spawn-title">New experiment from</span> <span id="spawn-target-id" class="mono"></span></span>
+        <div class="spacer"></div>
+        <span class="close-btn" onclick="closeSpawnModal()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <label class="modal-field">
+          <textarea id="spawn-text" rows="4" placeholder="what to try next..."></textarea>
+        </label>
+        <div id="spawn-error" class="modal-error hidden"></div>
+        <div id="spawn-status" class="modal-status hidden"></div>
+        <div class="modal-actions">
+          <button class="btn-ghost" onclick="closeSpawnModal()">Cancel</button>
+          <button id="spawn-submit" class="btn-spawn" onclick="submitSpawn()">Spawn</button>
+        </div>
+      </div>
     </div>
   </div>
 

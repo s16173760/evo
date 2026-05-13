@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import re
+import secrets
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -18,8 +19,8 @@ ANNOTATIONS_FILE = "annotations.json"
 INFRA_FILE = "infra_log.json"
 META_FILE = "meta.json"
 PROJECT_FILE = "project.md"
-SCRATCHPAD_FILE = "scratchpad.md"
-NOTES_FILE = "notes.md"
+KEYFILE_NAME = "keyfile"
+RUNTIME_ENV_VALUES_FILE = "runtime_env_values.json"
 
 SUPPORTED_HOSTS = frozenset({
     "claude-code",
@@ -132,12 +133,12 @@ def project_path(root: Path) -> Path:
     return evo_dir(root) / PROJECT_FILE
 
 
-def scratchpad_path(root: Path) -> Path:
-    return workspace_path(root) / SCRATCHPAD_FILE
+def runtime_env_values_path(root: Path) -> Path:
+    return workspace_path(root) / RUNTIME_ENV_VALUES_FILE
 
 
-def notes_path(root: Path) -> Path:
-    return workspace_path(root) / NOTES_FILE
+def keyfile_path(root: Path) -> Path:
+    return evo_dir(root) / KEYFILE_NAME
 
 
 def lock_file_for(path: Path) -> Path:
@@ -163,6 +164,23 @@ def atomic_write_json(path: Path, data: Any) -> None:
     atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def atomic_write_bytes(path: Path, data: bytes, *, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        tmp_path = Path(tmp_name)
+        if mode is not None:
+            os.chmod(tmp_path, mode)
+        tmp_path.replace(path)
+        if mode is not None:
+            os.chmod(path, mode)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
 def load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
@@ -170,16 +188,33 @@ def load_json(path: Path, default: Any) -> Any:
         return json.load(handle)
 
 
+def ensure_workspace_keyfile(root: Path) -> Path:
+    path = keyfile_path(root)
+    if not path.exists():
+        atomic_write_bytes(path, secrets.token_bytes(32), mode=0o600)
+    else:
+        os.chmod(path, 0o600)
+    return path
+
+
 DEFAULT_MAX_ATTEMPTS = 3
 
 
-def default_config(root: Path, target: str, benchmark: str, metric: str, gate: str | None) -> dict[str, Any]:
+def default_config(
+    root: Path,
+    target: str,
+    benchmark: str,
+    metric: str,
+    gate: str | None,
+    project_name: str | None = None,
+) -> dict[str, Any]:
     # Import here to avoid a circular import at module load.
     from .frontier_strategies import DEFAULT_FRONTIER_STRATEGY
     return {
         "repo_root": str(root),
         "workspace_dir": WORKSPACE_NAME,
         "worktrees_dir": "worktrees",
+        "project_name": project_name or root.name,
         "target": target,
         "benchmark": benchmark,
         "gate": gate,
@@ -188,6 +223,10 @@ def default_config(root: Path, target: str, benchmark: str, metric: str, gate: s
         "comparison_blocked": False,
         "max_attempts": DEFAULT_MAX_ATTEMPTS,
         "frontier_strategy": DEFAULT_FRONTIER_STRATEGY,
+        "runtime_env": {
+            "inherit_shell": True,
+            "dotenv": [],
+        },
         "initialized_at": utc_now(),
     }
 
@@ -196,6 +235,7 @@ def default_graph() -> dict[str, Any]:
     return {
         "root": "root",
         "next_id": 0,
+        "workspace_notes": [],
         "nodes": {
             "root": {
                 "id": "root",
@@ -217,6 +257,43 @@ def default_graph() -> dict[str, Any]:
     }
 
 
+def add_workspace_note(root: Path, text: str) -> dict[str, Any]:
+    """Write a workspace-level note (not tied to any experiment).
+    Returns the new record."""
+    gpath = graph_path(root)
+    with advisory_lock(lock_file_for(gpath)):
+        graph = load_json(gpath, default_graph())
+        graph.setdefault("workspace_notes", [])
+        entry = {
+            "text": text,
+            "timestamp": utc_now(),
+            "exp_id": None,
+        }
+        graph["workspace_notes"].append(entry)
+        atomic_write_json(gpath, graph)
+        return entry
+
+
+def list_all_notes(graph: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every note in the graph (workspace + per-node), sorted by
+    timestamp descending. Each record includes its `exp_id` (None for
+    workspace notes) so callers can render a flat list without re-walking."""
+    out: list[dict[str, Any]] = []
+    for entry in graph.get("workspace_notes", []) or []:
+        copy = dict(entry)
+        copy.setdefault("exp_id", None)
+        out.append(copy)
+    for node in graph["nodes"].values():
+        if node.get("id") == "root":
+            continue
+        for entry in node.get("notes", []):
+            copy = dict(entry)
+            copy.setdefault("exp_id", node["id"])
+            out.append(copy)
+    out.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+    return out
+
+
 def load_config(root: Path) -> dict[str, Any]:
     return load_json(config_path(root), {})
 
@@ -225,6 +302,145 @@ def save_config(root: Path, config: dict[str, Any]) -> None:
     path = config_path(root)
     with advisory_lock(lock_file_for(path)):
         atomic_write_json(path, config)
+
+
+_DOTENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def parse_dotenv(text: str) -> dict[str, str]:
+    """Parse the simple dotenv subset evo supports for runtime env forwarding."""
+    values: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not _DOTENV_KEY_RE.match(key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            value = value[1:-1]
+        elif len(value) >= 2 and value[0] == value[-1] == '"':
+            value = bytes(value[1:-1], "utf-8").decode("unicode_escape")
+        else:
+            match = re.search(r"\s+#", value)
+            if match:
+                value = value[:match.start()].rstrip()
+        values[key] = value
+    return values
+
+
+def _dotenv_path(root: Path, raw_path: str) -> Path:
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return path
+
+
+def resolve_runtime_env(root: Path, config: dict[str, Any]) -> dict[str, str]:
+    """Resolve benchmark/gate runtime env fresh for each attempt.
+
+    Config stores source metadata only; values are loaded from the orchestrator
+    process environment and configured dotenv files when this function runs.
+    """
+    runtime_env = dict(config.get("runtime_env") or {})
+    resolved: dict[str, str] = {}
+    if runtime_env.get("inherit_shell", True):
+        resolved.update(os.environ)
+
+    for source in runtime_env.get("dotenv", []) or []:
+        if not isinstance(source, dict):
+            continue
+        raw_path = str(source.get("path") or "")
+        if not raw_path:
+            continue
+        path = _dotenv_path(root, raw_path)
+        if not path.exists():
+            raise RuntimeError(f"runtime dotenv file not found: {raw_path} ({path})")
+        parsed = parse_dotenv(path.read_text(encoding="utf-8"))
+        mode = source.get("mode", "all")
+        if mode == "all":
+            resolved.update(parsed)
+        elif mode == "allow":
+            allowed = [str(k) for k in source.get("keys", []) or []]
+            for key in allowed:
+                if key in parsed:
+                    resolved[key] = parsed[key]
+        else:
+            raise RuntimeError(f"unknown runtime dotenv mode for {raw_path}: {mode!r}")
+    values = load_json(runtime_env_values_path(root), {"variables": {}})
+    runtime_variables = values.get("variables", {}) if isinstance(values, dict) else {}
+    if isinstance(runtime_variables, dict):
+        resolved.update({str(key): str(value) for key, value in runtime_variables.items()})
+    return resolved
+
+
+def _redact_env_preview(value: str) -> str:
+    if value == "":
+        return "<empty>"
+    if len(value) <= 4:
+        return "*" * len(value)
+    return f"{value[:2]}...{value[-2:]}"
+
+
+def runtime_env_summary(root: Path, config: dict[str, Any]) -> dict[str, Any]:
+    """Return redacted runtime env metadata for CLI/UI display."""
+    runtime_env = dict(config.get("runtime_env") or {})
+    sources = []
+    key_names: set[str] = set(os.environ) if runtime_env.get("inherit_shell", True) else set()
+    dotenv_key_previews: dict[str, str] = {}
+    for source in runtime_env.get("dotenv", []) or []:
+        if not isinstance(source, dict):
+            continue
+        raw_path = str(source.get("path") or "")
+        path = _dotenv_path(root, raw_path) if raw_path else root
+        entry = {
+            "path": raw_path,
+            "mode": source.get("mode", "all"),
+            "keys": list(source.get("keys", []) or []),
+            "exists": path.exists(),
+        }
+        if path.exists():
+            parsed = parse_dotenv(path.read_text(encoding="utf-8"))
+            if entry["mode"] == "all":
+                entry["resolved_keys"] = sorted(parsed)
+                entry["key_previews"] = {
+                    key: _redact_env_preview(parsed[key])
+                    for key in sorted(parsed)
+                }
+                dotenv_key_previews.update(entry["key_previews"])
+                key_names.update(parsed)
+            else:
+                allowed = [str(k) for k in source.get("keys", []) or []]
+                present = sorted(k for k in allowed if k in parsed)
+                entry["resolved_keys"] = present
+                entry["key_previews"] = {
+                    key: _redact_env_preview(parsed[key])
+                    for key in present
+                }
+                dotenv_key_previews.update(entry["key_previews"])
+                key_names.update(present)
+        sources.append(entry)
+    values = load_json(runtime_env_values_path(root), {"variables": {}})
+    runtime_variables = values.get("variables", {}) if isinstance(values, dict) else {}
+    variable_previews = {
+        str(key): _redact_env_preview(str(value))
+        for key, value in sorted((runtime_variables or {}).items())
+    } if isinstance(runtime_variables, dict) else {}
+    key_names.update(variable_previews)
+    return {
+        "inherit_shell": runtime_env.get("inherit_shell", True),
+        "dotenv": sources,
+        "resolved_key_count": len(key_names),
+        "resolved_keys": sorted(key_names),
+        "configured_key_previews": dict(sorted(dotenv_key_previews.items())),
+        "runtime_variable_previews": variable_previews,
+    }
 
 
 def load_graph(root: Path) -> dict[str, Any]:
@@ -275,20 +491,25 @@ def init_workspace(
     metric: str,
     gate: str | None,
     host: str | None = None,
+    commit_strategy: str = "all",
+    project_name: str | None = None,
 ) -> str:
+    if commit_strategy not in ("all", "tracked-only"):
+        raise RuntimeError(
+            f"commit_strategy must be 'all' or 'tracked-only', got {commit_strategy!r}"
+        )
     run_id = _allocate_run(root)
     ensure_workspace_dirs(root)
-    config = default_config(root, target, benchmark, metric, gate)
+    config = default_config(root, target, benchmark, metric, gate, project_name=project_name)
+    config["execution_backend"] = "worktree"
+    config["commit_strategy"] = commit_strategy
     atomic_write_json(config_path(root), config)
     atomic_write_json(graph_path(root), default_graph())
     atomic_write_json(annotations_path(root), {"annotations": []})
     atomic_write_json(infra_path(root), {"events": []})
+    ensure_workspace_keyfile(root)
     if not project_path(root).exists():
         atomic_write_text(project_path(root), "# Project Understanding\n\n")
-    if not notes_path(root).exists():
-        atomic_write_text(notes_path(root), "# Notes\n\n")
-    if not scratchpad_path(root).exists():
-        atomic_write_text(scratchpad_path(root), "# Scratchpad\n\n")
     if host is not None:
         set_host(root, host)
     return run_id
@@ -361,6 +582,38 @@ def attempt_outcome_path(root: Path, exp_id: str, attempt: int) -> Path:
     return attempt_dir(root, exp_id, attempt) / "outcome.json"
 
 
+def parse_diff_patch(root: Path, exp_id: str, attempt: int) -> dict[str, Any] | None:
+    """Parse experiments/<exp_id>/attempts/NNN/diff.patch into structured data.
+
+    Returns {"files": [str], "added": int, "removed": int} or None if the patch
+    is missing, empty, or contains no diff headers. Used by both the scratchpad
+    diff-summary line and outcome.json's `change_files` field.
+    """
+    if attempt <= 0:
+        return None
+    patch = experiments_path(root) / exp_id / "attempts" / f"{attempt:03d}" / "diff.patch"
+    if not patch.exists():
+        return None
+    content = patch.read_text(encoding="utf-8")
+    if not content.strip():
+        return None
+    files: list[str] = []
+    added = 0
+    removed = 0
+    for line in content.splitlines():
+        if line.startswith("diff --git"):
+            parts = line.split()
+            if len(parts) >= 4:
+                files.append(parts[3].removeprefix("b/"))
+        elif line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    if not files:
+        return None
+    return {"files": files, "added": added, "removed": removed}
+
+
 def experiment_log_path(root: Path, exp_id: str, filename: str) -> Path:
     return experiments_dir_for(root, exp_id) / filename
 
@@ -398,25 +651,32 @@ def append_infra_event(root: Path, message: str, breaking: bool) -> dict[str, An
         return event
 
 
-def append_note(root: Path, content: str) -> None:
-    path = notes_path(root)
-    with advisory_lock(lock_file_for(path)):
-        existing = path.read_text(encoding="utf-8") if path.exists() else ""
-        if existing and not existing.endswith("\n"):
-            existing += "\n"
-        existing += content
-        if not existing.endswith("\n"):
-            existing += "\n"
-        atomic_write_text(path, existing)
+def allocate_experiment(
+    root: Path,
+    parent_id: str,
+    hypothesis: str,
+    backend_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Allocate a new experiment node and its workspace.
 
+    Graph mutation (ID generation, parent linking, status init) stays here;
+    workspace creation is delegated to the configured backend.
+    """
+    from .backends import AllocateCtx, backend_spec_from_config, load_backend
 
-def allocate_experiment(root: Path, parent_id: str, hypothesis: str) -> dict[str, Any]:
     gpath = graph_path(root)
     with advisory_lock(lock_file_for(gpath)):
         graph = load_json(gpath, default_graph())
         nodes = graph["nodes"]
         if parent_id not in nodes:
             raise KeyError(f"Unknown parent experiment: {parent_id}")
+        parent = nodes[parent_id]
+        if parent.get("status") == "pruned":
+            raise RuntimeError(
+                f"Cannot allocate child of pruned parent {parent_id}. "
+                f"Pruning marks a branch as unpromising; branch elsewhere "
+                f"or re-status the parent if you want to continue here."
+            )
         next_id = graph.get("next_id", 0)
         exp_id = f"exp_{next_id:04d}"
         graph["next_id"] = next_id + 1
@@ -424,35 +684,55 @@ def allocate_experiment(root: Path, parent_id: str, hypothesis: str) -> dict[str
         meta = _load_meta(root)
         run_id = meta.get("active", "run")
         branch = f"evo/{run_id}/{exp_id}"
-        worktree = worktrees_path(root) / exp_id
-        parent = nodes[parent_id]
         start_point = current_branch(root) if parent_id == "root" else parent["branch"]
         if not start_point:
             raise RuntimeError(f"Parent {parent_id} does not have a branch to fork from")
 
-        # A freshly allocated experiment ID should be collision-free. If a stale
-        # branch or prunable worktree exists for that ID, clean it up here so a
-        # partial prior run does not block new allocation.
-        if worktree.exists():
-            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=root, check=False)
-            shutil.rmtree(worktree, ignore_errors=True)
-        subprocess.run(["git", "worktree", "prune"], cwd=root, check=False)
-        if git_branch_exists(root, branch):
-            subprocess.run(["git", "branch", "-D", branch], cwd=root, check=False)
+        # parent_commit is the canonical frozen reference for backends that
+        # need a commit hash (PoolBackend's `git checkout -B <branch> <hash>`).
+        # For non-root parents we trust what was recorded when the parent was
+        # committed -- in pool mode the parent's branch lives in a slot, not
+        # in the main repo, so a rev-parse against `start_point` from cwd=root
+        # would fail. Root children fall back to rev-parsing the main repo's
+        # current branch.
+        if parent_id == "root":
+            parent_commit = subprocess.run(
+                ["git", "rev-parse", start_point],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        else:
+            parent_commit = parent.get("commit")
+            if not parent_commit:
+                raise RuntimeError(
+                    f"Parent {parent_id} has no recorded commit; cannot allocate child"
+                )
 
-        subprocess.run(
-            ["git", "worktree", "add", "-b", branch, str(worktree), start_point],
-            cwd=root,
-            check=True,
+        workspace_config = load_config(root)
+        if backend_override is None:
+            backend_name, backend_config = backend_spec_from_config(workspace_config)
+        else:
+            backend_name = backend_override["name"]
+            backend_config = dict(backend_override.get("config") or {})
+
+        backend = load_backend(
+            root,
+            explicit_name=backend_name,
+            explicit_config=backend_config,
         )
-
-        # Propagate project.md into the worktree so it's accessible even
-        # though it's not committed to git.
-        project_src = project_path(root)
-        if project_src.exists():
-            worktree_evo = worktree / WORKSPACE_NAME
-            worktree_evo.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(project_src), str(worktree_evo / PROJECT_FILE))
+        result = backend.allocate(
+            AllocateCtx(
+                root=root,
+                exp_id=exp_id,
+                parent_node=parent if parent_id != "root" else None,
+                parent_commit=parent_commit,
+                parent_ref=start_point,
+                branch=branch,
+                hypothesis=hypothesis,
+            )
+        )
 
         node = {
             "id": exp_id,
@@ -464,9 +744,11 @@ def allocate_experiment(root: Path, parent_id: str, hypothesis: str) -> dict[str
             "updated_at": utc_now(),
             "eval_epoch": load_config(root).get("current_eval_epoch", 1),
             "score": None,
-            "branch": branch,
-            "worktree": str(worktree),
-            "commit": current_commit(worktree),
+            "backend": backend_name,
+            "backend_config": backend_config,
+            "branch": result.branch,
+            "worktree": str(result.worktree),
+            "commit": result.commit,
             "pruned_reason": None,
             "benchmark_result": None,
             "gate_result": None,
@@ -480,46 +762,30 @@ def allocate_experiment(root: Path, parent_id: str, hypothesis: str) -> dict[str
         return node
 
 
-def remove_worktree_only(root: Path, node: dict[str, Any]) -> None:
-    worktree = Path(node["worktree"])
-    if worktree.exists():
-        subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=root, check=False)
-    if worktree.exists():
-        shutil.rmtree(worktree, ignore_errors=True)
-    subprocess.run(["git", "worktree", "prune"], cwd=root, check=False)
+def remove_worktree_only(root: Path, node: dict[str, Any]) -> bool:
+    """Remove the worktree directory only (no branch deletion). Used by `evo gc`.
+
+    Returns True if the backend actually freed disk-side state, False if it
+    was a no-op (pool mode -- slot directories are user-owned). Callers use
+    this to avoid reporting freed-resource counts that don't match reality.
+    """
+    from .backends import DiscardCtx, load_backend
+
+    return load_backend(root, node=node).gc(DiscardCtx(root=root, node=node))
 
 
 def delete_discarded_experiment(root: Path, node: dict[str, Any]) -> None:
-    remove_worktree_only(root, node)
-    branch = node["branch"]
-    subprocess.run(["git", "branch", "-D", branch], cwd=root, check=False)
+    """Full cleanup: remove worktree and delete branch. Used by `evo discard`."""
+    from .backends import DiscardCtx, load_backend
+
+    load_backend(root, node=node).discard(DiscardCtx(root=root, node=node))
 
 
 def reset_runtime_state(root: Path) -> None:
     """Remove the active run's worktrees, branches, and directory."""
-    meta = _load_meta(root)
-    run_id = meta.get("active")
-    workspace = workspace_path(root)
-    wt_dir = worktrees_path(root)
-    subprocess.run(["git", "worktree", "prune"], cwd=root, check=False)
-    if wt_dir.exists():
-        for path in sorted(wt_dir.iterdir()):
-            if path.is_dir():
-                subprocess.run(["git", "worktree", "remove", "--force", str(path)], cwd=root, check=False)
-                shutil.rmtree(path, ignore_errors=True)
-    subprocess.run(["git", "worktree", "prune"], cwd=root, check=False)
-    # Only delete branches for this run (evo/<run_id>/*)
-    branch_prefix = f"refs/heads/evo/{run_id}/" if run_id else "refs/heads/evo/"
-    result = subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname:short)", branch_prefix],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    for branch in [line.strip() for line in result.stdout.splitlines() if line.strip()]:
-        subprocess.run(["git", "branch", "-D", branch], cwd=root, check=False)
-    shutil.rmtree(workspace, ignore_errors=True)
+    from .backends import load_backend
+
+    load_backend(root).reset_all(root)
 
 
 def git_status_porcelain(path: Path) -> str:
@@ -533,27 +799,89 @@ def git_status_porcelain(path: Path) -> str:
     return result.stdout
 
 
-def maybe_commit_worktree(node: dict[str, Any], hypothesis: str) -> str | None:
+def maybe_commit_worktree(
+    node: dict[str, Any],
+    hypothesis: str,
+    commit_strategy: str = "all",
+    executor: Any = None,
+) -> str | None:
+    """Stage and commit the experiment's edits inside its workspace.
+
+    `executor` (a `WorkspaceExecutor`) routes git invocations either as
+    local subprocess (worktree/pool backends) or through sandbox-agent
+    (remote backend). Default `None` preserves backwards-compat for any
+    caller that hasn't been updated to pass one (resolves to local).
+    """
+    if commit_strategy not in ("all", "tracked-only"):
+        raise RuntimeError(
+            f"commit_strategy must be 'all' or 'tracked-only', got {commit_strategy!r}"
+        )
+    if executor is None:
+        from .workspace_executor import LocalExecutor
+        executor = LocalExecutor()
+
     worktree = Path(node["worktree"])
-    if not git_status_porcelain(worktree).strip():
-        return current_commit(worktree)
-    subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
-    subprocess.run(
+    status = executor.run(["git", "status", "--porcelain"], cwd=worktree)
+    if status.exit_code != 0:
+        raise RuntimeError(
+            f"git status --porcelain failed in {worktree}: {status.stderr[:500]}"
+        )
+    if not status.stdout.strip():
+        # No changes; report the current HEAD as the commit so callers
+        # don't need to special-case the no-op path.
+        head = executor.run(["git", "rev-parse", "HEAD"], cwd=worktree)
+        return head.stdout.strip() if head.exit_code == 0 else None
+
+    add_args = ["-A"] if commit_strategy == "all" else ["-u"]
+    add = executor.run(["git", "add", *add_args], cwd=worktree)
+    if add.exit_code != 0:
+        raise RuntimeError(f"git add failed: {add.stderr[:500]}")
+
+    # In tracked-only mode the index may still be empty after `git add -u`
+    # if the only changes were untracked files. `git commit` would fail
+    # with "nothing to commit"; treat as a no-op.
+    diff_check = executor.run(
+        ["git", "diff", "--cached", "--quiet"], cwd=worktree,
+    )
+    if diff_check.exit_code == 0:
+        head = executor.run(["git", "rev-parse", "HEAD"], cwd=worktree)
+        return head.stdout.strip() if head.exit_code == 0 else None
+
+    commit_result = executor.run(
         ["git", "commit", "-m", f"evo: {node['id']} {hypothesis}"],
         cwd=worktree,
-        check=True,
     )
-    return current_commit(worktree)
+    if commit_result.exit_code != 0:
+        raise RuntimeError(f"git commit failed: {commit_result.stderr[:500]}")
+    head = executor.run(["git", "rev-parse", "HEAD"], cwd=worktree)
+    return head.stdout.strip() if head.exit_code == 0 else None
 
 
-def render_git_diff(root: Path, parent_ref: str, worktree: Path, relative_path: str) -> str:
-    result = subprocess.run(
+def render_git_diff(
+    root: Path,
+    parent_ref: str,
+    worktree: Path,
+    relative_path: str,
+    executor: Any = None,
+) -> str:
+    """`git diff <parent_ref> -- <path>` against the experiment's worktree.
+
+    `executor` (a `WorkspaceExecutor`) routes the call appropriately for
+    the active backend. Default `None` resolves to a local executor for
+    backwards-compat with callers that haven't been updated.
+    """
+    if executor is None:
+        from .workspace_executor import LocalExecutor
+        executor = LocalExecutor()
+    result = executor.run(
         ["git", "diff", parent_ref, "--", relative_path],
         cwd=worktree,
-        check=True,
-        capture_output=True,
-        text=True,
     )
+    if result.exit_code != 0:
+        raise RuntimeError(
+            f"git diff {parent_ref} -- {relative_path} failed: "
+            f"{result.stderr[:500]}"
+        )
     return result.stdout
 
 

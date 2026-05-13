@@ -56,9 +56,9 @@ Parse the stream-json transcript and assert specific tool-call patterns the skil
 Examples for `/evo:discover`:
 - Agent runs `evo init` before `evo new` (temporal ordering)
 - Agent calls `evo gate add root` at least once
-- Agent runs the benchmark at least 3 times before the first baseline commit (determinism check)
+- Agent runs a cheap validation before the first baseline commit
 - Agent writes files inside `worktrees/exp_*` but not in the repo root after `evo init`
-- Agent calls either `evo done <id> --score <num>` or explicitly justifies skipping
+- Agent calls `evo run <id>` for the baseline and does not call `evo done` afterward
 
 Each assertion is a function that takes the parsed event list and returns pass/fail + a diagnostic. Failures emit the relevant event window so the PR reviewer can see what happened.
 

@@ -1,6 +1,6 @@
 [project]
 name = "evo-hq-cli"
-version = "0.3.3"
+version = "0.4.0"
 description = "Structured experiment-driven code optimization with git worktrees, traces, and a local dashboard. CLI for the evo plugin (Claude Code, Codex)."
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -10,6 +10,44 @@ dependencies = [
   "flask>=3.0.0",
   "portalocker>=2.8.0",
   "pyyaml>=6.0.0",
+  "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+# Remote-sandbox provider SDKs. Install with `evo-hq-cli[modal]` or
+# `evo-hq-cli[all]`. Each provider's evo adapter lazy-imports its SDK
+# inside its module so users who don't want a given provider don't
+# carry its deps.
+modal = [
+    "modal>=0.62.0",
+]
+e2b = [
+    "e2b>=2.20.0",
+]
+daytona = [
+    "daytona>=0.170.0",
+]
+aws = [
+    "boto3>=1.42.66",
+]
+azure = [
+    "azure-identity>=1.17.1",
+    "azure-mgmt-resource>=23.1.1",
+    "azure-mgmt-network>=28.0.0",
+    "azure-mgmt-compute>=34.0.0",
+]
+all = [
+    "modal>=0.62.0",
+    "e2b>=2.20.0",
+    "daytona>=0.170.0",
+    "boto3>=1.42.66",
+    "azure-identity>=1.17.1",
+    "azure-mgmt-resource>=23.1.1",
+    "azure-mgmt-network>=28.0.0",
+    "azure-mgmt-compute>=34.0.0",
+]
+mcp = [
+    "mcp>=1.0.0",
 ]
 
 [project.urls]
@@ -20,6 +58,10 @@ Issues = "https://github.com/evo-hq/evo/issues"
 [project.scripts]
 evo = "evo.cli:main"
 evo-dashboard = "evo.dashboard:main"
+evo-drain = "evo.inject.drain:main"
+
+[project.entry-points."hermes_agent.plugins"]
+evo = "evo.hermes_plugin"
 
 [build-system]
 requires = ["setuptools>=68.0.0"]
@@ -27,9 +69,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+script-files = ["bin/evo-hook-drain"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-evo = ["static/*"]
+evo = ["static/*", "opencode_plugin/*.js", "openclaw_plugin/*.js"]

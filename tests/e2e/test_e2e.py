@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "evo"
 
 
@@ -932,6 +932,170 @@ def test_dispatch_orchestrator_step01_codex(root: Path) -> None:
     print(f"  PASS test_dispatch_orchestrator_step01_codex (host={final_host}, dispatch not used)")
 
 
+def test_pruned_parent_rejects_new_children(root: Path) -> None:
+    """`evo new --parent <pruned_id>` must error out with a clear message.
+    Pruning is a hard contract, not just a status flag."""
+    evo(
+        ["init", "--target", "agent.py",
+         "--benchmark", "python eval.py --agent {target}",
+         "--metric", "max", "--host", "generic"],
+        cwd=root,
+    )
+    evo(["new", "--parent", "root", "-m", "baseline"], cwd=root)
+    out = evo(["run", "exp_0000"], cwd=root)
+    assert "COMMITTED exp_0000" in out.stdout
+    evo(["prune", "exp_0000", "--reason", "test prune"], cwd=root)
+
+    # Must error out, not silently allocate.
+    result = evo(["new", "--parent", "exp_0000", "-m", "should fail"], cwd=root, check=False)
+    assert result.returncode != 0, result.stdout
+    assert "pruned" in (result.stderr + result.stdout).lower(), result.stderr
+
+    # Graph state unchanged: no exp_0001 was allocated.
+    graph = load_graph(root)
+    assert "exp_0001" not in graph["nodes"], graph["nodes"].keys()
+
+
+def test_scratchpad_aggregates_per_node_notes(root: Path) -> None:
+    """`evo set --note` writes per-node notes; the scratchpad's Notes section
+    must include them. Previously the section read only the legacy notes.md
+    and missed all `evo set --note` writes."""
+    evo(
+        ["init", "--target", "agent.py",
+         "--benchmark", "python eval.py --agent {target}",
+         "--metric", "max", "--host", "generic"],
+        cwd=root,
+    )
+    evo(["new", "--parent", "root", "-m", "baseline"], cwd=root)
+    evo(["run", "exp_0000"], cwd=root)
+    evo(["set", "exp_0000", "--note", "this is a per-node note for exp_0000"], cwd=root)
+    scratchpad = evo(["scratchpad"], cwd=root).stdout
+    assert "## Notes" in scratchpad
+    assert "this is a per-node note for exp_0000" in scratchpad, scratchpad
+
+
+def test_evo_done_writes_attempt_scoped_traces(root: Path) -> None:
+    """`evo done --traces` must write into attempts/NNN/traces/ so that
+    `evo traces` and the dashboard surface manually-recorded traces. Before
+    this fix, traces landed under experiments/<id>/traces/ which neither
+    reader looks at."""
+    evo(
+        ["init", "--target", "agent.py",
+         "--benchmark", "python eval.py --agent {target}",
+         "--metric", "max", "--host", "generic"],
+        cwd=root,
+    )
+    evo(["new", "--parent", "root", "-m", "manual record"], cwd=root)
+    # Stage a fake traces directory mimicking what an out-of-band benchmark
+    # would produce.
+    fake = root.parent / "fake-traces"
+    fake.mkdir(exist_ok=True)
+    (fake / "task_0.json").write_text(
+        json.dumps({"experiment_id": "exp_0000", "task_id": "0", "status": "passed", "score": 1.0}),
+        encoding="utf-8",
+    )
+    evo(["done", "exp_0000", "--score", "0.5", "--traces", str(fake)], cwd=root)
+
+    attempts_dir = root / ".evo" / "run_0000" / "experiments" / "exp_0000" / "attempts"
+    attempt_dirs = sorted(attempts_dir.iterdir())
+    assert len(attempt_dirs) == 1, [p.name for p in attempt_dirs]
+    traces_dir = attempt_dirs[0] / "traces"
+    assert (traces_dir / "task_0.json").exists(), list(attempt_dirs[0].iterdir())
+
+    # `evo traces` should now find it.
+    out = evo(["traces", "exp_0000", "0"], cwd=root)
+    assert "passed" in out.stdout, out.stdout
+
+
+def test_dashboard_traces_and_log_routes(root: Path) -> None:
+    """Dashboard must read attempt-scoped traces (not the never-written
+    experiments/<id>/traces/ path) and accept nested log paths so callers
+    can request attempts/001/benchmark.log."""
+    from evo.dashboard import create_app
+    evo(
+        ["init", "--target", "agent.py",
+         "--benchmark", "python eval.py --agent {target}",
+         "--metric", "max", "--host", "generic"],
+        cwd=root,
+    )
+    evo(["new", "--parent", "root", "-m", "for dashboard"], cwd=root)
+    evo(["run", "exp_0000"], cwd=root)
+
+    app = create_app(root=root)
+    client = app.test_client()
+    try:
+
+        # /traces returns the attempt-scoped traces dict
+        resp = client.get("/api/node/exp_0000/traces")
+        assert resp.status_code == 200, resp.status_code
+        payload = json.loads(resp.data)
+        # The max-repo benchmark writes task_0.json into EVO_TRACES_DIR
+        assert "task_0.json" in payload, payload
+
+        # /traces/<task_id> returns the specific task envelope
+        resp = client.get("/api/node/exp_0000/traces/0")
+        assert resp.status_code == 200, resp.status_code
+        envelope = json.loads(resp.data)
+        assert envelope.get("task_id") == "0", envelope
+
+        # /log/<filename> with bare name auto-resolves to latest attempt
+        resp = client.get("/api/node/exp_0000/log/benchmark.log")
+        assert resp.status_code == 200
+        assert resp.data, "benchmark.log should be non-empty"
+
+        # /log/<path> with explicit attempts/NNN/ path also works
+        resp = client.get("/api/node/exp_0000/log/attempts/001/benchmark.log")
+        assert resp.status_code == 200
+        assert resp.data
+
+        # Path traversal is blocked
+        resp = client.get("/api/node/exp_0000/log/../../etc/passwd")
+        assert resp.status_code in (400, 404)
+    finally:
+        pass
+
+
+def test_worktree_mode_commit_strategy_unchanged(root: Path) -> None:
+    """Regression: alpha.2 must not alter worktree-mode behavior. Default
+    commit_strategy is 'all', `--i-staged-new-files yes` is a silent no-op,
+    untracked non-gitignored files in the worktree get committed."""
+    evo(
+        ["init", "--target", "agent.py",
+         "--benchmark", "python eval.py --agent {target}",
+         "--metric", "max", "--host", "generic"],
+        cwd=root,
+    )
+    config = json.loads(
+        (root / ".evo" / "run_0000" / "config.json").read_text(encoding="utf-8")
+    )
+    assert config["commit_strategy"] == "all", config
+    assert config["execution_backend"] == "worktree", config
+
+    evo(["new", "--parent", "root", "-m", "baseline"], cwd=root)
+    out_baseline = evo(["run", "exp_0000"], cwd=root)
+    assert "COMMITTED exp_0000" in out_baseline.stdout
+
+    evo(["new", "--parent", "exp_0000", "-m", "edit and stray"], cwd=root)
+    wt = root / ".evo" / "run_0000" / "worktrees" / "exp_0001"
+    write(wt / "agent.py", 'STATE = "GOOD"\n')
+    # An untracked, non-gitignored file in the worktree. In worktree mode
+    # this should be committed (`git add -A`) without requiring any ack.
+    write(wt / "scratch.txt", "scratch\n")
+    out = evo(
+        ["run", "exp_0001", "--i-staged-new-files", "yes"], cwd=root
+    )
+    assert "COMMITTED exp_0001" in out.stdout, out.stdout
+
+    graph = load_graph(root)
+    commit_sha = graph["nodes"]["exp_0001"]["commit"]
+    assert commit_sha
+    committed = run(
+        ["git", "show", "--name-only", "--pretty=", commit_sha], cwd=root
+    ).stdout.splitlines()
+    assert "scratch.txt" in committed, committed
+    assert "agent.py" in committed, committed
+
+
 def main() -> None:
     temp_root = Path(tempfile.mkdtemp(prefix="evo-e2e-"))
     try:
@@ -990,6 +1154,39 @@ def main() -> None:
             test_sdk_gate_does_not_overwrite_benchmark_traces(sdk_gate_trace_repo)
         finally:
             _shutdown_dashboard(sdk_gate_trace_repo)
+
+        worktree_strategy_repo = temp_root / "worktree-strategy-repo"
+        worktree_strategy_repo.mkdir()
+        init_repo(worktree_strategy_repo)
+        setup_max_repo(worktree_strategy_repo)
+        test_worktree_mode_commit_strategy_unchanged(worktree_strategy_repo)
+
+        prune_repo = temp_root / "prune-repo"
+        prune_repo.mkdir()
+        init_repo(prune_repo)
+        setup_max_repo(prune_repo)
+        test_pruned_parent_rejects_new_children(prune_repo)
+
+        notes_repo = temp_root / "notes-repo"
+        notes_repo.mkdir()
+        init_repo(notes_repo)
+        setup_max_repo(notes_repo)
+        test_scratchpad_aggregates_per_node_notes(notes_repo)
+
+        done_repo = temp_root / "done-repo"
+        done_repo.mkdir()
+        init_repo(done_repo)
+        setup_max_repo(done_repo)
+        test_evo_done_writes_attempt_scoped_traces(done_repo)
+
+        dashboard_repo = temp_root / "dashboard-repo"
+        dashboard_repo.mkdir()
+        init_repo(dashboard_repo)
+        setup_max_repo(dashboard_repo)
+        try:
+            test_dashboard_traces_and_log_routes(dashboard_repo)
+        finally:
+            _shutdown_dashboard(dashboard_repo)
 
         # Live dispatch tests — gated by EVO_LIVE_TEST_CLAUDE=1.
         # Real claude -p / codex exec subprocesses, real LLM cost.

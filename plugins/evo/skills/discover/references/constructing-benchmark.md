@@ -98,7 +98,7 @@ Common pairings:
 | LLM-as-judge rating | Structural validity check (output parses / is well-formed) |
 | Quality-of-output score | Sanity assertion that catches degenerate outputs (empty, constant, out-of-range) |
 
-Add the gate via `evo gate add root --name <name> --command <command>` during the discover flow. The gate runs alongside every experiment and auto-discards any experiment that breaks it, even if the benchmark score improves.
+Add the gate via `evo gate add root --name <name> --command <command>` during the discover flow. The gate runs alongside every experiment. An experiment that breaks a gate is not committed even if the benchmark score improves; it remains an evaluated node until an agent fixes and reruns it or explicitly discards it.
 
 **The gate command must exit non-zero on regression.** `evo run` checks exit code, not stdout. A bare `python3 benchmark.py --task-ids 5,6,9` always exits 0 because the benchmark script's contract is "exit 0 unless infrastructure broke" -- it prints a low score but never fails. To make a benchmark-derived gate actually catch regressions, the benchmark needs a `--min-score <threshold>` flag (or equivalent) that:
 
@@ -156,7 +156,7 @@ Some benchmarks have inherent noise (LLM calls, random sampling, concurrent exec
 
 Honest accounting of what this means today:
 
-- v0.1.0 of evo compares experiment scores directly (single sample per experiment). It does **not** yet retry experiments, average across runs, or use confidence intervals. A noisy benchmark can therefore commit a "lucky" experiment as a real improvement.
+- Current evo compares experiment scores directly and supports bounded retries for evaluated nodes, but it does **not** yet average across independent runs or use confidence intervals. A noisy benchmark can therefore commit a "lucky" experiment as a real improvement.
 - The held-out gate remains the only safety net against benchmark gaming and overfitting. It is mandatory whenever the benchmark was constructed from scratch (see "Required gate pairing" above).
 - Multi-run / variance-aware optimization is on the roadmap but not implemented yet. Until it lands, **noisy benchmarks should be expected to produce noisier optimization trees** -- some committed experiments will not reproduce.
 
