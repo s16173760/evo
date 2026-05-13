@@ -951,6 +951,68 @@ def create_app(root: Path | None = None) -> Flask:
             payload["seed"] = seed_used
         return jsonify(payload)
 
+    @app.post("/api/direct")
+    def api_direct():
+        """Queue an `evo direct` directive from the dashboard.
+
+        Body: {"text": str, "from_exp_id"?: str, "exp_id"?: str}
+
+        Without `exp_id`, the event is workspace-scoped (broadcast to orchestrators).
+        With `exp_id`, the event is routed to that specific subagent.
+        If `from_exp_id` is set on a workspace broadcast, the text is wrapped to
+        instruct the orchestrator to spawn a child of that node.
+        """
+        from .inject import marker, queue
+        from .inject.registry import list_active_sessions
+
+        body = request.get_json(silent=True) or {}
+        text = (body.get("text") or "").strip()
+        if not text:
+            return jsonify({"error": "text is required"}), 400
+
+        target_exp = body.get("exp_id")
+        from_exp = body.get("from_exp_id")
+        root = _root()
+
+        if target_exp:
+            event_id = queue.append_exp_event(root, target_exp, text)
+            marker.touch(root, target_exp)
+            return jsonify({
+                "event_id": event_id,
+                "kind": "targeted",
+                "exp_id": target_exp,
+                "fanout": 1,
+            })
+
+        mode = (body.get("mode") or "spawn").strip().lower()
+        if from_exp:
+            if mode == "retry":
+                text = (
+                    f"Run another attempt of {from_exp}. "
+                    f"Notes from dashboard: {text}"
+                )
+            else:
+                text = (
+                    f"Start a new experiment from {from_exp}. "
+                    f"Notes from dashboard: {text}"
+                )
+        event_id = queue.append_workspace_event(root, text)
+        delivered = 0
+        for sess in list_active_sessions(root):
+            if sess.get("exp_id"):
+                continue
+            sid = sess.get("session_id")
+            if not sid:
+                continue
+            marker.touch(root, sid)
+            delivered += 1
+        return jsonify({
+            "event_id": event_id,
+            "kind": "broadcast",
+            "fanout": delivered,
+            "from_exp_id": from_exp,
+        })
+
     return app
 
 

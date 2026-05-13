@@ -7,7 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=layout3-91">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <!-- Top bar: logo · run · best-score · project · settings.
@@ -134,6 +134,29 @@
     </div>
   </div>
 
+  <!-- Spawn / retry modal. Mode (spawn|retry) swaps title, placeholder, and
+       submit label in JS; the form structure is the same. -->
+  <div id="spawn-overlay" class="modal-overlay hidden" onclick="closeSpawnModal(event)">
+    <div class="modal modal-confirm" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title"><span id="spawn-title">New experiment from</span> <span id="spawn-target-id" class="mono"></span></span>
+        <div class="spacer"></div>
+        <span class="close-btn" onclick="closeSpawnModal()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <label class="modal-field">
+          <textarea id="spawn-text" rows="4" placeholder="what to try next..."></textarea>
+        </label>
+        <div id="spawn-error" class="modal-error hidden"></div>
+        <div id="spawn-status" class="modal-status hidden"></div>
+        <div class="modal-actions">
+          <button class="btn-ghost" onclick="closeSpawnModal()">Cancel</button>
+          <button id="spawn-submit" class="btn-spawn" onclick="submitSpawn()">Spawn</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Scratchpad modal -->
   <div id="scratchpad-overlay" class="modal-overlay hidden" onclick="closeScratchpad()">
     <div class="modal" onclick="event.stopPropagation()">
@@ -147,6 +170,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=layout3-91"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

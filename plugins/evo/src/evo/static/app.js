@@ -276,7 +276,7 @@ function backendLogoFor(spec) {
     // glyph in between.
     const fallback = BACKEND_FALLBACK_SVG[key] || '';
     const fallbackEnc = fallback ? encodeURIComponent(fallback) : '';
-    return `<img src="/static/logos/${key}.${ext}?v=layout3-82" alt="${esc(key)}"
+    return `<img src="/static/logos/${key}.${ext}" alt="${esc(key)}"
       onerror="this.onerror=null; this.outerHTML=decodeURIComponent('${fallbackEnc}');">`;
   }
   return BACKEND_FALLBACK_SVG[key] || '';
@@ -1103,7 +1103,11 @@ function toggleCollapse(id, ev) {
 
 // ─── Render: Unified timeline ────────────────────────────
 const TIMELINE = {
-  rowHeight: 62,
+  rowHeight: 108,
+  // Card height. `rowHeight - barHeight` is the vertical breathing room,
+  // half above and half below — the lower gap also doubles as the slot
+  // for the hover-revealed action chips (retry / spawn).
+  barHeight: 52,
   // Pixels per depth column. Sized so a spine bar at full width still has
   // space for the L-connector segment before the next column starts.
   colWidth: 500,
@@ -1284,7 +1288,8 @@ function renderTimeline(opts) {
       hoverAttr = ` data-hover="${esc(hoverPayload)}"`;
     }
 
-    const bar = `<div class="${barCls.join(' ')}" style="left:${g.barX}px;top:${g.top + (TIMELINE.rowHeight - 44) / 2}px;width:${g.barW}px"${hoverAttr} ${clickHandler}>
+    const barTop = g.top + (TIMELINE.rowHeight - TIMELINE.barHeight) / 2;
+    const bar = `<div class="${barCls.join(' ')}" style="left:${g.barX}px;top:${barTop}px;width:${g.barW}px;height:${TIMELINE.barHeight}px"${hoverAttr} ${clickHandler}>
       ${barInner}
     </div>`;
 
@@ -1292,12 +1297,32 @@ function renderTimeline(opts) {
     // clean left edge. Collapsed summaries render after the toggle. When
     // the parent is on the spine, the toggle gets the amber variant so the
     // best-path chain reads continuously through its branch handles.
+    // Caret sits centered on the bar's right edge so the connector line
+    // visually "passes through" it on the way to children.
     let caret = '';
     if (r.hasChildren && r.node.id !== 'root') {
       const ch = r.collapsed ? '+' : '-';
       const caretTop = g.top + (TIMELINE.rowHeight - 16) / 2;
       const caretCls = inLineage ? 'exp-caret lineage' : 'exp-caret';
-      caret = `<span class="${caretCls}" style="left:${g.barRight + 6}px;top:${caretTop}px" onclick="toggleCollapse('${esc(r.node.id)}', event)" title="${r.collapsed ? 'Expand branch' : 'Collapse branch'}">${ch}</span>`;
+      caret = `<span class="${caretCls}" style="left:${g.barRight - 8}px;top:${caretTop}px" onclick="toggleCollapse('${esc(r.node.id)}', event)" title="${r.collapsed ? 'Expand branch' : 'Collapse branch'}">${ch}</span>`;
+    }
+
+    // Hover action chips: retry (icon) + spawn (+). Anchored to the bar's
+    // bottom edge with internal padding for the visible gap, so the hover
+    // area is continuous bar → chips (no flicker as the cursor crosses).
+    // Must be the immediate next sibling of .exp-bar so the CSS scopes
+    // hover to this one node, not all of them.
+    let actionChips = '';
+    if (r.node.id !== 'root' && allowInteraction) {
+      const actionsTop = barTop + TIMELINE.barHeight;
+      // Anchor at the bar's horizontal center; CSS translateX(-50%) on
+      // .exp-bar-actions centers the chip group regardless of its width.
+      const actionsLeft = g.barX + g.barW / 2;
+      const retryIcon = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
+      actionChips = `<div class="exp-bar-actions" style="left:${actionsLeft}px;top:${actionsTop}px">
+        <button class="exp-action exp-action-icon" onclick="retryNode('${esc(r.node.id)}', event)" title="Run a new attempt of this experiment" aria-label="Retry">${retryIcon}</button>
+        <button class="exp-action" onclick="spawnFromNode('${esc(r.node.id)}', event)" title="Start a new experiment from this one" aria-label="Spawn">+</button>
+      </div>`;
     }
 
     let summary = '';
@@ -1307,7 +1332,9 @@ function renderTimeline(opts) {
       summary = `<div class="exp-collapsed-summary" style="left:${bx}px;top:${g.top + (TIMELINE.rowHeight - 22) / 2}px" onclick="toggleCollapse('${esc(r.node.id)}', event)">+${r.hiddenChildCount} child${r.hiddenChildCount > 1 ? 'ren' : ''}${best}</div>`;
     }
 
-    return bar + caret + summary;
+    // actionChips MUST come immediately after bar in DOM so the CSS
+    // `.exp-bar:hover + .exp-bar-actions` scopes hover to this node only.
+    return bar + actionChips + caret + summary;
   }).join('');
 
   // Soft amber lane behind the spine row. The spine reliably collapses onto
@@ -1766,14 +1793,14 @@ async function openDrawer(expId, opts) {
   const content = document.getElementById('sidebar-content');
   if (!sidebar || !content) return;
   sidebar.classList.remove('hidden');
-  // Reflect selection in scatter + timeline immediately so the
-  // previously-selected dot/bar de-highlights without waiting for a refresh.
-  renderScatter();
-  renderTimeline();
-  // Center the selected bar in the timeline. Only do this on a genuine
-  // selection change so re-opening the drawer (or routine refreshes that
-  // re-enter via the polling loop) don't keep yanking the scroll.
-  if (previousNode !== expId) focusSelectedInTimeline();
+  // Reflect selection in scatter + timeline only on a real selection change.
+  // Tab switches inside the drawer re-enter openDrawer with the same id —
+  // re-rendering the canvas then would reset scroll/zoom for no reason.
+  if (previousNode !== expId) {
+    renderScatter();
+    renderTimeline();
+    focusSelectedInTimeline();
+  }
 
   const node = state.graph.nodes[expId];
   if (!node) return;
@@ -1808,6 +1835,7 @@ async function openDrawer(expId, opts) {
         <span class="dot" style="background:${statusColor}"></span>
         ${esc(statusLabel(node.status))}
       </span>
+      ${node.id !== 'root' ? `<button class="sidebar-spawn-btn" onclick="spawnFromNode('${esc(node.id)}')" title="Queue an evo direct directive asking the orchestrator to branch a new experiment from this node.">+ spawn</button>` : ''}
       ${isPrunable ? `<button class="sidebar-prune-btn" onclick="pruneNode('${esc(node.id)}')" title="Remove this leaf from the frontier so the planner stops branching from it. Preserves the commit.">prune</button>` : ''}
       <div class="spacer"></div>
       <span class="drawer-close" onclick="closeSidebar()" title="Close (Esc)">&times;</span>
@@ -2112,6 +2140,106 @@ async function submitPrune() {
     // new status (the planner's next pick reads the same graph file).
     await fetchAll();
     if (state.selectedNode === expId) openDrawer(expId);
+  } catch (e) {
+    if (errEl) {
+      errEl.textContent = `Network error: ${e.message || e}`;
+      errEl.classList.remove('hidden');
+    }
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+// Retry-from-node: same modal as spawn, but the wrapper text on the
+// backend tells the agent this is a re-run, not a branch. Reuses the
+// spawn modal UI with a different mode flag.
+function retryNode(expId, ev) {
+  if (ev) ev.stopPropagation();
+  openSpawnModal(expId, 'retry');
+}
+
+// Spawn-from-node: posts to /api/direct with from_exp_id so the orchestrator
+// branches a new experiment from the clicked node with the user's guidance.
+// Uses the same modal pattern as prune to avoid OS-level prompts.
+function spawnFromNode(expId, ev) {
+  if (ev) ev.stopPropagation();
+  openSpawnModal(expId, 'spawn');
+}
+
+function openSpawnModal(expId, mode) {
+  const node = state.graph.nodes[expId];
+  if (!node) return;
+  state._spawnTarget = expId;
+  state._spawnMode = mode || 'spawn';
+  const overlay = document.getElementById('spawn-overlay');
+  const titleEl = document.getElementById('spawn-title');
+  const targetEl = document.getElementById('spawn-target-id');
+  const textEl = document.getElementById('spawn-text');
+  const errEl = document.getElementById('spawn-error');
+  const statusEl = document.getElementById('spawn-status');
+  const submitEl = document.getElementById('spawn-submit');
+  if (!overlay || !targetEl || !textEl) return;
+  const isRetry = state._spawnMode === 'retry';
+  if (titleEl) titleEl.textContent = isRetry ? 'Retry' : 'New experiment from';
+  targetEl.textContent = expId;
+  textEl.value = '';
+  textEl.placeholder = isRetry ? 'what to change...' : 'what to try next...';
+  if (submitEl) submitEl.textContent = isRetry ? 'Retry' : 'Spawn';
+  if (errEl) { errEl.textContent = ''; errEl.classList.add('hidden'); }
+  if (statusEl) { statusEl.textContent = ''; statusEl.classList.add('hidden'); }
+  overlay.classList.remove('hidden');
+  setTimeout(() => textEl.focus(), 0);
+}
+
+function closeSpawnModal(ev) {
+  if (ev && ev.currentTarget !== ev.target) return;
+  const overlay = document.getElementById('spawn-overlay');
+  if (overlay) overlay.classList.add('hidden');
+  state._spawnTarget = null;
+}
+
+async function submitSpawn() {
+  const expId = state._spawnTarget;
+  if (!expId) return;
+  const textEl = document.getElementById('spawn-text');
+  const errEl = document.getElementById('spawn-error');
+  const statusEl = document.getElementById('spawn-status');
+  const submitBtn = document.getElementById('spawn-submit');
+  const text = (textEl?.value || '').trim();
+  if (!text) {
+    if (errEl) {
+      errEl.textContent = 'Guidance is required.';
+      errEl.classList.remove('hidden');
+    }
+    textEl?.focus();
+    return;
+  }
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    const res = await fetch('/api/direct', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_exp_id: expId, text, mode: state._spawnMode || 'spawn' }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (errEl) {
+        errEl.textContent = `Could not send: ${payload.error || res.statusText}`;
+        errEl.classList.remove('hidden');
+      }
+      return;
+    }
+    // fanout=0 means it's queued but no agent is running — it'll get picked
+    // up the next time one starts. Surface that without jargon.
+    const fanout = payload.fanout ?? 0;
+    if (statusEl) {
+      statusEl.textContent = fanout > 0
+        ? 'Sent to the agent.'
+        : 'Queued — no agent is running right now. It will pick this up when it starts.';
+      statusEl.classList.remove('hidden');
+    }
+    if (textEl) textEl.value = '';
+    setTimeout(() => closeSpawnModal(), 1200);
   } catch (e) {
     if (errEl) {
       errEl.textContent = `Network error: ${e.message || e}`;
@@ -3313,8 +3441,45 @@ window.addEventListener('resize', () => {
   _resizeTimer = setTimeout(() => { renderScatter(); }, 100);
 });
 
+// Signature of every graph + view input that affects timeline/scatter
+// geometry or paint. The poll loop re-renders on a 5s cadence; without
+// this gate, identical fetches still tear down the canvas and reset
+// scroll/zoom because applyTimelineZoom and the scroll-restore writes
+// fire on every render. Skipping when nothing changed is the single
+// biggest reduction in "jarring view jumps while browsing".
+function viewSignature() {
+  const g = state.graph;
+  const parts = [];
+  if (g && g.nodes) {
+    const ids = Object.keys(g.nodes).sort();
+    for (const id of ids) {
+      const n = g.nodes[id];
+      parts.push(
+        id,
+        n.status || '',
+        n.score == null ? '' : String(n.score),
+        n.parent || '',
+        n.eval_epoch == null ? '' : String(n.eval_epoch),
+        n.current_attempt == null ? '' : String(n.current_attempt),
+      );
+    }
+  }
+  parts.push(
+    '|',
+    state.scopeRoot || '',
+    state.viewMode || '',
+    state.selectedNode || '',
+    [...(state.collapsed || [])].sort().join(','),
+    (state.activeRunId || ''),
+  );
+  return parts.join('\x1f');
+}
+
 function render() {
   renderTopbar();
+  const sig = viewSignature();
+  if (state._lastViewSig === sig) return;
+  state._lastViewSig = sig;
   renderScatter();
   renderTimeline();
 }

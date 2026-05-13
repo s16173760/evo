@@ -836,11 +836,6 @@ body {
   user-select: none;
   border-radius: 2px;
   z-index: 2;
-  /* Counter the timeline-rows-inner CSS `zoom` so the toggle stays at a
-     constant on-screen size regardless of how far the user has zoomed in
-     or out. --inv-zoom is published by applyTimelineZoom. */
-  transform: scale(var(--inv-zoom, 1));
-  transform-origin: top left;
 }
 .exp-caret:hover {
   color: var(--text-1);
@@ -859,11 +854,60 @@ body {
 }
 .exp-caret.empty { opacity: 0; pointer-events: none; }
 
+/* Hover-revealed action chips (retry / spawn) that sit just below a node.
+   Hidden by default; appear when the cursor is over the owning bar or the
+   chips themselves (the bridge prevents flicker on the small gap). */
+.exp-bar-actions {
+  position: absolute;
+  display: flex;
+  gap: 4px;
+  /* The inline `left` is the bar's horizontal center; translateX(-50%)
+     here centers the chip group around that anchor regardless of width.
+     padding-top creates the visible gap while keeping the hover area
+     contiguous with the bar's bottom edge — no flicker on cursor cross. */
+  transform: translateX(-50%);
+  padding-top: 6px;
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+/* Adjacent-sibling combinator scopes hover to THIS bar's actions only.
+   The render order is: bar → actions → caret → summary, so `+` matches
+   exactly one .exp-bar-actions per hovered bar. */
+.exp-bar:hover + .exp-bar-actions,
+.exp-bar-actions:hover {
+  opacity: 1;
+  pointer-events: auto;
+}
+.exp-action {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 9px;
+  color: var(--text-2);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.exp-action.exp-action-icon {
+  padding: 4px 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.exp-action:hover {
+  color: var(--purple);
+  border-color: rgba(168,85,247,0.55);
+  background: rgba(168,85,247,0.08);
+}
+
 .exp-bar {
   position: absolute;
   display: flex;
   align-items: center;
-  height: 44px;
+  height: 52px;
   border-radius: var(--radius-md);
   padding: 0 14px;
   font-size: 14px;
@@ -1090,6 +1134,24 @@ body {
   color: var(--red);
   border-color: rgba(239,68,68,0.55);
   background: rgba(239,68,68,0.06);
+}
+.sidebar-spawn-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 4px 11px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+}
+.sidebar-spawn-btn:hover {
+  color: var(--purple);
+  border-color: rgba(168,85,247,0.55);
+  background: rgba(168,85,247,0.06);
 }
 .drawer-header {
   display: flex;
@@ -1606,6 +1668,15 @@ body {
   color: var(--red);
   font-size: 12px;
 }
+.modal-status {
+  margin-top: 10px;
+  padding: 8px 11px;
+  background: rgba(168,85,247,0.06);
+  border: 1px solid rgba(168,85,247,0.45);
+  border-radius: var(--radius-sm);
+  color: var(--purple);
+  font-size: 12px;
+}
 .modal-actions {
   display: flex;
   align-items: center;
@@ -1635,6 +1706,26 @@ body {
   color: #fecaca;
 }
 .btn-prune:disabled { opacity: 0.45; cursor: default; }
+.btn-spawn {
+  background: rgba(168,85,247,0.12);
+  border: 1px solid rgba(168,85,247,0.50);
+  color: var(--purple);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 5px 13px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.btn-spawn:hover:not(:disabled) {
+  background: rgba(168,85,247,0.18);
+  border-color: var(--purple);
+  color: #ddd6fe;
+}
+.btn-spawn:disabled { opacity: 0.45; cursor: default; }
 .modal-header {
   display: flex;
   align-items: center;
