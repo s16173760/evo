@@ -1259,10 +1259,9 @@ body {
   min-width: 0;
 }
 .drawer-summary {
-  padding: 24px 24px 28px;
+  padding: 22px 24px 22px;
   background:
-    radial-gradient(circle at 12% 0%, rgba(245,158,11,0.14), transparent 42%),
-    radial-gradient(circle at 80% 110%, rgba(245,158,11,0.06), transparent 50%),
+    radial-gradient(circle at 0% 0%, rgba(245,158,11,0.10), transparent 38%),
     var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -1276,41 +1275,65 @@ body {
   margin-bottom: 12px;
   display: block;
 }
+/* Score row: big mono number + a subtle delta pill. No text-shadow glow
+   — relies on size + amber for visual weight. */
+.drawer-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
 .drawer-score {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 56px;
+  font-size: 52px;
   font-weight: 700;
   color: var(--amber);
   line-height: 1;
   letter-spacing: -1.5px;
-  text-shadow: 0 0 24px rgba(245,158,11,0.25);
 }
 .drawer-score-delta {
   font-family: 'JetBrains Mono', monospace;
   font-size: 20px;
   font-weight: 700;
-  margin-left: 14px;
   letter-spacing: -0.3px;
 }
-.drawer-decision-note {
-  display: block;
-  margin-top: 13px;
-  padding: 11px 13px;
-  border: 1px solid rgba(245,158,11,0.22);
-  border-radius: var(--radius-md);
-  background: rgba(245,158,11,0.05);
-  color: var(--text-3);
-  font-size: 13px;
-  line-height: 1.5;
-}
-.drawer-status-note {
-  font-size: 14px;
+.drawer-score-delta.up      { color: var(--green); }
+.drawer-score-delta.down    { color: var(--red); }
+.drawer-score-delta.neutral { color: var(--text-4); }
+
+/* Parent-link line under the score. Status is shown by the header pill,
+   so the meta is just "from <parent_id>" with a navigable link. */
+.drawer-score-meta {
+  margin-top: 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
   color: var(--text-4);
-  margin-top: 6px;
-  display: block;
 }
-.drawer-status-note.error {
-  color: var(--red);
+.drawer-parent-link {
+  color: var(--text-2);
+  text-decoration: none;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.drawer-parent-link:hover {
+  color: var(--text-1);
+  text-decoration: underline;
+}
+
+/* Detail line — small explanatory text for failures, prune reasons,
+   or the frontier-candidate hint. Sits below the meta row, subtler. */
+.drawer-summary-detail {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+.drawer-summary-detail.error  { color: var(--red); }
+.drawer-summary-detail.accent {
+  color: var(--amber);
+  padding: 8px 11px;
+  background: rgba(245,158,11,0.05);
+  border: 1px solid rgba(245,158,11,0.25);
+  border-radius: var(--radius-md);
 }
 .sidebar-empty {
   font-size: 14px;
@@ -1348,10 +1371,10 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  margin-right: 7px;
-  vertical-align: -2px;
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  vertical-align: -4px;
 }
 .drawer-backend-inline-logo svg,
 .drawer-backend-inline-logo img { width: 100%; height: 100%; display: block; }

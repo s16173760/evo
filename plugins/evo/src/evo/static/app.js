@@ -235,22 +235,48 @@ const BACKEND_FALLBACK_SVG = {
   manual: `<svg viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <circle cx="6" cy="6" r="4" fill="none" stroke="#a1a1aa" stroke-width="1.3" stroke-dasharray="2 2"/>
   </svg>`,
+  // Vendor fallbacks — only used if the official SVG isn't dropped in
+  // /static/logos/. Recognizable-by-shape marks in the vendor's color,
+  // not trademark-fidelity reproductions.
+  e2b: `<svg viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <rect x="1" y="1" width="4" height="4" rx="0.6" fill="#fbbf24"/>
+    <rect x="7" y="1" width="4" height="4" rx="0.6" fill="#fbbf24"/>
+    <rect x="1" y="7" width="4" height="4" rx="0.6" fill="#fbbf24"/>
+    <rect x="7" y="7" width="4" height="4" rx="0.6" fill="#fbbf24"/>
+  </svg>`,
+  daytona: `<svg viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <circle cx="6" cy="6" r="4.8" fill="#10b981"/>
+    <path d="M 4 4 L 8 6 L 4 8 Z" fill="#0a0a0c"/>
+  </svg>`,
+  aws: `<svg viewBox="0 0 24 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <text x="12" y="5" font-family="-apple-system, sans-serif" font-size="5.4" font-weight="800" fill="#ff9900" text-anchor="middle" dominant-baseline="central">AWS</text>
+    <path d="M 4 9.2 Q 12 11.4 20 9.2" stroke="#ff9900" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  </svg>`,
+  azure: `<svg viewBox="0 0 12 12" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <polygon points="6,1.5 10.5,10.5 1.5,10.5" fill="#0078d4"/>
+    <polygon points="6,1.5 7.6,5 4.5,10.5 1.5,10.5" fill="#005ba1"/>
+  </svg>`,
 };
-// Vendor brands we attempt to load from disk. Anything not in this set
-// falls through to the stylized inline SVG above (or empty for unknowns).
-const VENDOR_LOGOS = ['modal', 'e2b', 'daytona', 'aws', 'azure'];
+// Vendor brand → file extension. Most marks ship as SVG; E2B only
+// publishes a PNG of their circular mark publicly, so we load that.
+// Anything missing from this map falls through to the stylized inline
+// SVG fallback.
+const VENDOR_LOGO_EXT = {
+  modal: 'svg', aws: 'svg', azure: 'svg', daytona: 'svg', e2b: 'png',
+};
 
 function backendLogoFor(spec) {
   if (!spec) return '';
   const key = spec.name === 'remote' ? spec.provider : spec.name;
   if (!key) return '';
-  if (VENDOR_LOGOS.includes(key)) {
+  const ext = VENDOR_LOGO_EXT[key];
+  if (ext) {
     // Inline the fallback in the onerror handler so a missing file
     // gracefully degrades to the stylized mark without a broken-image
     // glyph in between.
     const fallback = BACKEND_FALLBACK_SVG[key] || '';
     const fallbackEnc = fallback ? encodeURIComponent(fallback) : '';
-    return `<img src="/static/logos/${key}.svg" alt="${esc(key)}"
+    return `<img src="/static/logos/${key}.${ext}?v=layout3-82" alt="${esc(key)}"
       onerror="this.onerror=null; this.outerHTML=decodeURIComponent('${fallbackEnc}');">`;
   }
   return BACKEND_FALLBACK_SVG[key] || '';
@@ -795,9 +821,13 @@ function buildVisibleRows() {
     return true;
   }
 
-  function sortedChildren(id) {
-    if (state.collapsed.has(id)) return [];
-    const kids = childIds(id);
+  // Two flavors of child enumeration:
+  //   * sortedChildrenAll — full topology, ignores collapse. Used by the
+  //     layout pass so toggling collapse on a subtree never reshuffles
+  //     the sibling arrangement.
+  //   * sortedChildren — collapse-aware. Used by the emit pass so
+  //     collapsed branches don't render their descendants.
+  function sortChildren(kids) {
     return [...kids].sort((a, b) => {
       const ain = spine.has(a) ? 0 : 1;
       const bin = spine.has(b) ? 0 : 1;
@@ -805,6 +835,13 @@ function buildVisibleRows() {
       const an = getNode(a), bn = getNode(b);
       return (an?.created_at || '').localeCompare(bn?.created_at || '');
     });
+  }
+  function sortedChildrenAll(id) {
+    return sortChildren(childIds(id));
+  }
+  function sortedChildren(id) {
+    if (state.collapsed.has(id)) return [];
+    return sortChildren(childIds(id));
   }
 
   // Pass 1: assign rowIndex to every node in the (possibly scoped) subtree.
@@ -829,7 +866,9 @@ function buildVisibleRows() {
   const baseRow = spineInView ? 1 : 0;  // row 0 is spine when present
 
   function isLeaf(id) {
-    return sortedChildren(id).length === 0;
+    // Topology check — ignores collapse so a collapsed subtree still
+    // classifies as a subtree (not a leaf) for layout purposes.
+    return sortedChildrenAll(id).length === 0;
   }
   function takeRow(depth, minRow) {
     const next = nextRowAtDepth.has(depth) ? nextRowAtDepth.get(depth) : baseRow;
@@ -839,7 +878,7 @@ function buildVisibleRows() {
   }
   function placeSpine(id, depth) {
     rowOf.set(id, 0);
-    const kids = sortedChildren(id);
+    const kids = sortedChildrenAll(id);
     // Phase A: leaves at depth+1 cluster directly under the spine.
     for (const k of kids) {
       if (!spine.has(k) && isLeaf(k)) {
@@ -857,7 +896,7 @@ function buildVisibleRows() {
     }
   }
   function placeSubtree(id, depth, minRow) {
-    const kids = sortedChildren(id);
+    const kids = sortedChildrenAll(id);
     if (kids.length === 0) {
       rowOf.set(id, takeRow(depth, minRow));
       return;
@@ -917,7 +956,21 @@ function buildVisibleRows() {
     emit(root.id, 0);
   }
 
-  return out;
+  // Full-topology dimensions — used by renderTimeline to size the
+  // scrollable inner box. Measuring from the full layout (rather than
+  // the emitted subset) keeps scroll / zoom stable when subtrees are
+  // collapsed: hidden rows still "exist" in the canvas, just empty.
+  let maxRowFull = 0;
+  for (const row of rowOf.values()) {
+    if (row > maxRowFull) maxRowFull = row;
+  }
+  let maxDepthFull = 0;
+  (function walkDepth(id, d) {
+    if (d > maxDepthFull) maxDepthFull = d;
+    for (const c of childIds(id)) walkDepth(c, d + 1);
+  })(root.id, 0);
+
+  return { rows: out, maxRowFull, maxDepthFull };
 }
 
 function countDescendants(id) {
@@ -983,7 +1036,7 @@ function renderFilterBar() {
   renderScopeBreadcrumb();
 
   // Visible count
-  const rows = buildVisibleRows();
+  const { rows } = buildVisibleRows();
   const visible = rows.filter((r) => r.node.id !== 'root').length;
   const total = (s.total_experiments || 0);
   const el = document.getElementById('visible-count');
@@ -1086,7 +1139,7 @@ function renderTimeline(opts) {
   const prevScope = state.scopeRoot;
   if (explicitScope) state.scopeRoot = explicitScope;
 
-  const rows = buildVisibleRows();
+  const { rows, maxRowFull, maxDepthFull } = buildVisibleRows();
 
   if (explicitScope) state.scopeRoot = prevScope;
 
@@ -1102,13 +1155,13 @@ function renderTimeline(opts) {
     };
   }
 
-  // Determine max depth + max rowIndex visible
-  let maxDepth = 0;
-  let maxRow = 0;
-  for (const r of rows) {
-    maxDepth = Math.max(maxDepth, r.depth);
-    maxRow = Math.max(maxRow, r.rowIndex);
-  }
+  // Inner dimensions come from the FULL topology (every node we
+  // positioned, including those hidden by collapse). Measuring from the
+  // emitted rows alone would shrink the inner box on collapse, clamping
+  // scrollTop and re-computing the zoom floor — visually yanking the
+  // view. Using the full layout keeps the scrollable area stable.
+  const maxRow = maxRowFull;
+  const maxDepth = maxDepthFull;
 
   const scoreRange = visibleScoreRange(rows);
   const totalWidth = TIMELINE.leftPad + (maxDepth + 1) * TIMELINE.colWidth + 40;
@@ -1158,15 +1211,24 @@ function renderTimeline(opts) {
     const sy = pg.y;
     const tx = sg.barX;
     const ty = sg.y;
-    const mx = sx + Math.max(8, (tx - sx) * 0.5);
     const isLineage = spineSet.has(r.node.id) && spineSet.has(r.node.parent);
     const muted = muteOffSpine && !isLineage;
     const cls = ['timeline-connector'];
     if (isLineage) cls.push('lineage');
     if (muted) cls.push('muted');
-    const d = (sy === ty)
-      ? `M${sx},${sy} L${tx},${ty}`
-      : `M${sx},${sy} L${mx},${sy} L${mx},${ty} L${tx},${ty}`;
+    // Cubic bezier instead of an L-shape. Two reasons:
+    //   - L-shapes from multiple parents in the same column share the
+    //     midpoint X for their vertical segments, so they pile onto a
+    //     single line and the eye loses which connector goes where.
+    //   - A smooth S-curve fans out at the source and converges at the
+    //     target — even when many parents send connectors into the next
+    //     column, the bends sit at distinct Y positions instead of
+    //     overlapping. Same-row parent/child degenerates to a flat
+    //     horizontal curve, identical to a straight line.
+    const dx = tx - sx;
+    const c1x = sx + dx * 0.5;
+    const c2x = sx + dx * 0.5;
+    const d = `M${sx},${sy} C${c1x.toFixed(1)},${sy} ${c2x.toFixed(1)},${ty} ${tx},${ty}`;
     connectorSegments.push(`<path class="${cls.join(' ')}" d="${d}"/>`);
   }
 
@@ -1757,16 +1819,29 @@ async function openDrawer(expId, opts) {
     </div>`;
 
   if (activeTab === 'summary') {
+    // Status pill lives in the drawer HEADER (always-visible). No need
+    // to repeat it here. The meta line just carries the parent link.
+    const deltaClass = !delta ? '' :
+      (delta.startsWith('+') && delta !== '+0.00') ? 'up' :
+      delta.startsWith('-') ? 'down' : 'neutral';
+    const parentLine = node.parent && node.parent !== 'root'
+      ? `<div class="drawer-score-meta">from <a class="drawer-parent-link" onclick="openDrawer('${esc(node.parent)}')">${esc(node.parent)}</a></div>`
+      : (node.parent === 'root' ? `<div class="drawer-score-meta">from baseline</div>` : '');
+    let detail = '';
+    if (node.status === 'failed' && node.error) {
+      detail = `<div class="drawer-summary-detail error">${esc(node.error)}</div>`;
+    } else if (node.status === 'pruned' && node.pruned_reason) {
+      detail = `<div class="drawer-summary-detail">${esc(node.pruned_reason)}</div>`;
+    } else if (isFrontierCandidate(node)) {
+      detail = `<div class="drawer-summary-detail accent">Frontier candidate — evo may branch from this node next.</div>`;
+    }
     html += `<div class="drawer-section drawer-summary">
-      <div style="display:flex;align-items:baseline">
+      <div class="drawer-score-row">
         <span class="drawer-score">${node.score != null ? node.score.toFixed(2) : '--'}</span>
-        ${delta ? `<span class="drawer-score-delta" style="color:${deltaColor}">${esc(delta)} from ${esc(shortId(node.parent))}</span>` : ''}
+        ${delta ? `<span class="drawer-score-delta ${deltaClass}">${esc(delta)}</span>` : ''}
       </div>
-      ${node.status === 'committed' ? '<span class="drawer-status-note">Score improved. Gate passed. Changes committed.</span>' : ''}
-      ${node.status === 'discarded' ? '<span class="drawer-status-note">Score did not improve vs parent. Discarded.</span>' : ''}
-      ${node.status === 'failed' ? `<span class="drawer-status-note error">Failed: ${esc(node.error || 'benchmark or gate error')}</span>` : ''}
-      ${node.status === 'pruned' ? `<span class="drawer-status-note">Pruned${node.pruned_reason ? `: ${esc(node.pruned_reason)}` : ''}. Removed from frontier; planner won't branch from here.</span>` : ''}
-      ${isFrontierCandidate(node) ? '<span class="drawer-decision-note">Frontier candidate: evo may branch from this node next. Use prune when this lineage should stay visible but stop receiving new children.</span>' : ''}
+      ${parentLine}
+      ${detail}
     </div>`;
 
     // Hypothesis is the narrative — what this experiment tries. Sits
