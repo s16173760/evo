@@ -48,6 +48,25 @@ def install(args: argparse.Namespace) -> int:
     settings = _pi_settings_file()
     ext_path = _evo_extension_path()
 
+    # Drive `openclaw plugins install evo --marketplace ...` automatically
+    # (this is what populates ~/.openclaw/extensions/evo/ with the skill
+    # files and .claude-plugin/plugin.json manifest). Idempotent — openclaw
+    # tolerates re-installs.
+    import shutil as _shutil
+    if _shutil.which("openclaw") is not None:
+        import subprocess as _sp
+        mkt_cmd = [
+            "openclaw", "plugins", "install", "evo",
+            "--marketplace", "https://github.com/evo-hq/evo",
+        ]
+        print(f"$ {' '.join(mkt_cmd)}")
+        _sp.call(mkt_cmd)
+    else:
+        print(
+            "NOTE: `openclaw` binary not on PATH; skipping marketplace install. "
+            "Install OpenClaw first: npm install -g openclaw"
+        )
+
     src = _bundled_pi_extension_source()
     if src is None:
         print(

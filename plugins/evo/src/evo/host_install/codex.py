@@ -83,11 +83,40 @@ def _enable_plugin(enable: bool) -> tuple[bool, Path]:
 
 def install(args: argparse.Namespace) -> int:
     print(_INSTALL_HINT)
+
+    import shutil as _shutil
+    if _shutil.which("codex") is None:
+        print(
+            "ERROR: `codex` binary not on PATH. Install Codex first:\n"
+            "  npm install -g @openai/codex",
+            file=__import__("sys").stderr,
+        )
+        return 2
+
+    from_path = getattr(args, "from_path", None)
+    trust_hooks = bool(getattr(args, "trust_hooks", False))
+
+    # Drive `codex plugin marketplace add` automatically (idempotent on
+    # repeat installs — codex returns success even if already added). This
+    # also has the side effect of creating ~/.codex/ on fresh installs
+    # where codex CLI has been npm-installed but never run.
+    # Skipped when --from-path is set, because the user is testing a local
+    # marketplace dir and shouldn't have it overwritten by the GitHub copy.
+    if not from_path:
+        import subprocess as _sp
+        mkt_cmd = ["codex", "plugin", "marketplace", "add", "evo-hq/evo"]
+        print(f"$ {' '.join(mkt_cmd)}")
+        _sp.call(mkt_cmd)
+
+    # Ensure config.toml exists. On freshly-npm-installed codex (never run
+    # interactively), the marketplace add above creates ~/.codex/ but may
+    # not create config.toml until the first `codex` invocation. Write a
+    # stub so the toggle/enable helpers below have something to edit.
     cfg = _codex_base() / "config.toml"
     if not cfg.exists():
-        print(f"NOTE: {cfg} not found — Codex may not be installed yet.")
-        print("After installing Codex, re-run `evo install codex`.")
-        return 0
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text("# created by `evo install codex`\n")
+        print(f"created stub {cfg}")
 
     # Replicate what codex's TUI `plugin/install` RPC does: copy the plugin
     # contents into `~/.codex/plugins/cache/<marketplace>/<plugin>/<ver>/`
@@ -102,8 +131,6 @@ def install(args: argparse.Namespace) -> int:
     # because `codex app-server` exits early on missing bubblewrap inside
     # minimal containers (e2b sandboxes etc.). File-copy replicates the
     # same disk state and works anywhere.
-    from_path = getattr(args, "from_path", None)
-    trust_hooks = bool(getattr(args, "trust_hooks", False))
     return _install_via_filecopy(from_path, trust_hooks=trust_hooks)
 
 

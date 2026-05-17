@@ -71,6 +71,34 @@ if [ "$HOOK_EVENT" = "SessionStart" ] && [ ! -f "$EVO_RUN/inject/sessions/$SID.j
 JSON
 fi
 
+# 4a. SessionStart drift checks — fire once per session, no network.
+# Two warnings, both surface via stderr (hosts log as hook_non_blocking_error).
+#   (i)  Cache vs marketplace clone version mismatch — the user did /plugin
+#        update but their host's cache didn't refresh (upstream cache
+#        invalidation bug, anthropics/claude-code#14061).
+#   (ii) `evo-drain` console_script missing — proactive nudge before any
+#        drain failure. Lets the user install evo-hq-cli before the actual
+#        drain handoff at the bottom of this script fires.
+if [ "$HOOK_EVENT" = "SessionStart" ]; then
+    HOOK_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    CACHE_MANIFEST="$HOOK_PLUGIN_ROOT/.claude-plugin/plugin.json"
+    MKT_MANIFEST=""
+    case "$HOOK_PLUGIN_ROOT" in
+        */.claude/plugins/cache/*) MKT_MANIFEST="$HOME/.claude/plugins/marketplaces/evo-hq-evo/plugins/evo/.claude-plugin/plugin.json" ;;
+        */.codex/plugins/cache/*)  MKT_MANIFEST="$HOME/.codex/.tmp/marketplaces/evo-hq/plugins/evo/.claude-plugin/plugin.json" ;;
+    esac
+    if [ -n "$MKT_MANIFEST" ] && [ -f "$MKT_MANIFEST" ] && [ -f "$CACHE_MANIFEST" ]; then
+        CACHE_VER=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$CACHE_MANIFEST" | head -1 | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
+        MKT_VER=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$MKT_MANIFEST" | head -1 | sed 's/.*"\([^"]*\)"[[:space:]]*$/\1/')
+        if [ -n "$CACHE_VER" ] && [ -n "$MKT_VER" ] && [ "$CACHE_VER" != "$MKT_VER" ]; then
+            echo "evo: plugin cache is stale (running $CACHE_VER, marketplace has $MKT_VER). Run: evo update --force" >&2
+        fi
+    fi
+    if ! command -v evo-drain >/dev/null 2>&1; then
+        echo "evo: install evo-hq-cli to enable mid-run inject (uv tool install evo-hq-cli)" >&2
+    fi
+fi
+
 # 5. Fast exit if this session never registered with evo.
 [ -f "$EVO_RUN/inject/sessions/$SID.json" ] || { echo '{}'; exit 0; }
 
@@ -82,7 +110,14 @@ if [ "$HOOK_EVENT" != "SessionStart" ]; then
     [ -f "$EVO_RUN/inject/markers/$SID.flag" ] || { echo '{}'; exit 0; }
 fi
 
-# 7. There's something to deliver — hand off to evo-drain (a pip-installed
-# console_script that uses the same Python that runs `evo`). The drain
-# also re-reads stdin to detect hook_event_name; pass STDIN_BUF along.
-exec evo-drain --run-dir "$EVO_RUN" --session "$SID" <<<"$STDIN_BUF"
+# 7. There's something to deliver — hand off to evo-drain. The SessionStart
+# block above already nudged the user to install evo-hq-cli when it's
+# missing, so this is a fallback error path. We don't bundle a `uv run`
+# fallback because it silently hides the suboptimal state from users — the
+# install nudge is louder and points at the canonical fix (issue #36).
+if command -v evo-drain >/dev/null 2>&1; then
+    exec evo-drain --run-dir "$EVO_RUN" --session "$SID" <<<"$STDIN_BUF"
+fi
+echo "evo-hook-drain: install evo-hq-cli to enable drain — 'uv tool install evo-hq-cli' or 'pipx install evo-hq-cli'" >&2
+echo '{}'
+exit 1
