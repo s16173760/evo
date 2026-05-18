@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/evo-hook-drain"
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/evo-hook-drain.js"]
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/evo-hook-drain"
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/evo-hook-drain.js"]
           }
         ]
       }
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/evo-hook-drain"
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/evo-hook-drain.js"]
           }
         ]
       }
