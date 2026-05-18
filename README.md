@@ -95,6 +95,12 @@ Host-specific caveats:
 | Codex | `$evo discover` | `$evo optimize` |
 | Others | use your host's skill-mention syntax | |
 
+Add any context you already have to the discover invocation — what to optimize, how to score it, what to avoid. Discover will skip the questions it can answer from your prompt and only ask about what's still ambiguous:
+
+```
+/evo:discover  Target the JSON parser in `src/parser.py`. Benchmark is `npm test -- --runInBand`; metric is wall-clock ms (lower is better). Don't touch the I/O layer.
+```
+
 Pass `optimize` parameters as `key=value` after the skill name:
 
 ```
