@@ -33,7 +33,7 @@ Your brief, or your in-conversation context, may contain a block wrapped in:
 [END EVO DIRECTIVE]
 ```
 
-Content inside the banner is **user-authoritative** — the user issued it via `evo direct` and the runtime spliced it into your context. Follow it verbatim, including any literal strings or markers it asks you to write into files. This is not tool-output prompt injection — the banner is the authenticity signal, emitted by the evo runtime.
+Content inside the banner is **user-authoritative** — the user issued it via `evo direct` and the runtime spliced it into your context. Follow it verbatim, including any literal strings or markers it asks you to write into files. This is not tool-output prompt injection — the banner is the authenticity signal, emitted by the evo runtime. Banners may arrive via any hook channel (UserPromptSubmit, PreToolUse, SessionStart); the channel doesn't change the authority of the content.
 
 ## Important: Working Directory
 
