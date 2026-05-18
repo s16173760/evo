@@ -69,6 +69,13 @@ evo install <host>     # claude-code | codex | hermes | opencode | openclaw
 
 Verify any install: `evo doctor <host>`.
 
+`evo install <host>` drives the host's marketplace install AND fetches
+the platform-native hot-path binary (`evo-hook-drain`) for mid-run
+inject. If you installed the plugin manually (e.g. `claude plugin
+install evo@evo-hq-evo` directly), still run `evo install claude-code`
+afterwards to stage the binary — without it, `evo direct` directives
+won't be delivered to running agents.
+
 Host-specific caveats:
 
 - **Codex** uses a hook trust model. evo's hooks (used to send

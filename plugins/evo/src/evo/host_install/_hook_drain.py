@@ -74,9 +74,18 @@ def _release_version_tag(version: str) -> str:
 
 
 def ensure_hook_drain_binary(plugin_root: Path, *, force: bool = False) -> bool:
-    """Download the evo-hook-drain binary for this platform into
-    `<plugin_root>/bin/` if it's not already there. Returns True on
-    success (file is now present and executable), False otherwise.
+    """Stage the evo-hook-drain binary into `<plugin_root>/bin/` if it's
+    not already there. Returns True on success (file is now present and
+    executable), False otherwise.
+
+    Sources, in order of precedence:
+      1. `EVO_HOOK_DRAIN_BINARY` env var — points to a local file. Used
+         by tests / local-source smoke runs to bypass the GitHub
+         release URL when there's no published release to fetch from.
+         The file gets copied (not symlinked) so it stays valid after
+         the source disappears.
+      2. GitHub release asset for this evo-hq-cli version. Fetched via
+         urllib (stdlib only).
 
     Non-fatal: a failed fetch prints a warning to stderr but doesn't
     raise. Hooks will fail at fire-time with a clearer error pointing
@@ -102,10 +111,39 @@ def ensure_hook_drain_binary(plugin_root: Path, *, force: bool = False) -> bool:
         # wasteful and might fail if the user is offline.
         return True
 
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # Env-var bypass for local-source / test contexts where no published
+    # release exists yet. The test harness builds the binary, sets
+    # EVO_HOOK_DRAIN_BINARY=<path>, then runs `evo install <host>` and
+    # gets the local file copied in instead of a 404 from urllib.
+    local_override = os.environ.get("EVO_HOOK_DRAIN_BINARY")
+    if local_override:
+        import shutil
+        src = Path(local_override)
+        if not src.is_file():
+            print(
+                f"WARN: EVO_HOOK_DRAIN_BINARY={local_override} does not "
+                f"point at a regular file. Falling back to GitHub release fetch.",
+                file=sys.stderr,
+            )
+        else:
+            try:
+                shutil.copyfile(src, dest)
+                if not is_windows:
+                    os.chmod(dest, 0o755)
+                print(f"installed evo-hook-drain binary from EVO_HOOK_DRAIN_BINARY: {dest}")
+                return True
+            except OSError as e:
+                print(
+                    f"WARN: failed to copy EVO_HOOK_DRAIN_BINARY={src} to {dest}: {e}. "
+                    f"Falling back to GitHub release fetch.",
+                    file=sys.stderr,
+                )
+
     version_tag = _release_version_tag(EVO_VERSION)
     url = _RELEASE_URL_TEMPLATE.format(version=version_tag, asset=asset)
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         print(f"$ fetching {asset} from {url}")
         urllib.request.urlretrieve(url, str(dest))

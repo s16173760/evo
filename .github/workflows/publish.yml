@@ -233,10 +233,16 @@ jobs:
     #
     # Skipped for per-SDK tags (py-v*, node-v*) since those don't change
     # evo-hq-cli, which is what the smoke installs from PyPI.
+    #
+    # Depends on github-release too because `evo install <host>` fetches
+    # the platform-native evo-hook-drain binary from the release's
+    # uploaded assets — those land in github-release's last step. Without
+    # this dependency the smoke would race and fetch from a release that
+    # exists (artifact metadata) but has no binary attached yet, 404ing.
     if: |
       startsWith(github.ref, 'refs/tags/v') ||
       startsWith(github.ref, 'refs/tags/cli-v')
-    needs: [publish-cli]
+    needs: [publish-cli, github-release]
     runs-on: ubuntu-latest
     # Each host run can take 5-10 min (codex slow, opencode + openclaw
     # ~7 min on 4G sandboxes). Five in parallel → wall time is the
