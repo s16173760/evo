@@ -157,7 +157,7 @@ evo init --name "<short project name>" \
   [--commit-strategy <all|tracked-only>]
 ```
 
-**`--host` is required.** Pass the host runtime you (the orchestrator) are running under. Allowed values: `claude-code`, `codex`, `opencode`, `openclaw`, `hermes`, `generic`. This is recorded in `.evo/meta.json` and read by `evo dispatch` (the optional fork-cache spawner). On `claude-code`, dispatch is available; on every other host evo's child-spawn falls back to your host's native parallel-Task primitive (no behavior change vs today). Pick the value matching the runtime you invoked `discover` from. Use `evo host set <value>` later if you change runtimes.
+**`--host` is required.** Pass the host runtime you (the orchestrator) are running under. Allowed values: `claude-code`, `codex`, `opencode`, `openclaw`, `hermes`, `generic`. This is recorded in `.evo/meta.json` so other commands can adapt to host-specific conventions. Pick the value matching the runtime you invoked `discover` from. Use `evo host set <value>` later if you change runtimes.
 
 **`--name` should be a short human-readable project label** for dashboard display, chosen from the repository/product context. Existing workspaces without a name fall back to the repo directory name; do not hand-edit config just to migrate them.
 
