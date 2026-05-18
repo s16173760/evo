@@ -23,10 +23,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+from ._hook_drain import ensure_hook_drain_binary
+
 
 _MARKETPLACE = "evo-hq/evo"
 _PLUGIN = "evo@evo-hq-evo"
 _MARKETPLACE_NAME = "evo-hq-evo"
+
+
+def _latest_cache_dir() -> Path | None:
+    """Return the latest-version plugin cache dir, or None if not installed.
+    Cache layout: ~/.claude/plugins/cache/<mkt>/evo/<version>/
+    """
+    root = Path.home() / ".claude" / "plugins" / "cache" / _MARKETPLACE_NAME / "evo"
+    if not root.exists():
+        return None
+    versions = sorted(p for p in root.iterdir() if p.is_dir())
+    return versions[-1] if versions else None
 
 # Strict release-tag shape: 'X.Y.Z' optionally followed by a pre-release
 # suffix ('0.4.0-alpha.5', '0.4.0a5', '0.4.0rc1'). Only this shape gets
@@ -99,6 +112,12 @@ def install(args: argparse.Namespace) -> int:
     rc = _run(["claude", "plugin", "install", _PLUGIN, "--scope", scope])
     if rc != 0:
         return rc
+    # Stage the platform-native evo-hook-drain binary inside the cache.
+    # hooks.json points at ${CLAUDE_PLUGIN_ROOT}/bin/evo-hook-drain;
+    # without the binary every hook fire would be a no-op.
+    plugin_dir = _latest_cache_dir()
+    if plugin_dir is not None:
+        ensure_hook_drain_binary(plugin_dir, force=bool(getattr(args, "force", False)))
     print(
         f"\n✓ evo installed for claude-code at scope={scope}.\n"
         "  If you're inside an active claude session, run `/reload-plugins` "
@@ -151,6 +170,11 @@ def update(args: argparse.Namespace) -> int:
 
     if rc != 0:
         return rc
+    # Re-stage the hook-drain binary into the freshly-installed cache.
+    # --force will re-download even if a binary's already there.
+    plugin_dir = _latest_cache_dir()
+    if plugin_dir is not None:
+        ensure_hook_drain_binary(plugin_dir, force=force)
     print(
         "\n✓ evo updated for claude-code.\n"
         "  If you're inside an active claude session, run `/reload-plugins` "

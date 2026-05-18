@@ -8,6 +8,8 @@ import argparse
 import os
 from pathlib import Path
 
+from ._hook_drain import ensure_hook_drain_binary
+
 
 _PLUGIN_KEY = '[plugins."evo@evo-hq"]'
 
@@ -247,6 +249,11 @@ def _install_via_filecopy(from_path: str | None, *, trust_hooks: bool = False) -
                      ignore=_shutil.ignore_patterns(
                          ".git", ".venv", "__pycache__", "build", "dist",
                          ".pytest_cache", "*.egg-info"))
+
+    # Stage the platform-native evo-hook-drain binary. hooks.json points
+    # at <PLUGIN_ROOT>/bin/evo-hook-drain; without the binary every hook
+    # fire would be a no-op.
+    ensure_hook_drain_binary(cache_dst, force=force)
 
     # Update config.toml: ensure `[features] plugin_hooks = true`
     # (gates whether codex fires plugin hooks at all) AND
