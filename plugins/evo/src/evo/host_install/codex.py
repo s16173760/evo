@@ -252,8 +252,11 @@ def _install_via_filecopy(from_path: str | None, *, trust_hooks: bool = False) -
 
     # Stage the platform-native evo-hook-drain binary. hooks.json points
     # at <PLUGIN_ROOT>/bin/evo-hook-drain; without the binary every hook
-    # fire would be a no-op.
-    ensure_hook_drain_binary(cache_dst, force=force)
+    # fire would be a no-op. The cache_dst was just (re)created above
+    # (rmtree if existed) so a fresh fetch is always correct here —
+    # `force=False` (default) avoids re-fetch only when the file is
+    # already at dest, which never happens since we just wiped.
+    ensure_hook_drain_binary(cache_dst)
 
     # Update config.toml: ensure `[features] plugin_hooks = true`
     # (gates whether codex fires plugin hooks at all) AND

@@ -263,8 +263,8 @@ def test_openclaw(sandbox_4g):
 # PyPI normalises 0.4.1-alpha.2 to 0.4.1a2; plugin marketplace tag is
 # v0.4.1-alpha.2. Both forms appear in user-facing docs and are tested
 # together to catch normalisation drift between PyPI metadata and git tags.
-_ALPHA_PEP440 = "0.4.1a2"
-_ALPHA_TAG = "0.4.1-alpha.2"
+_ALPHA_PEP440 = "0.4.1a5"
+_ALPHA_TAG = "0.4.1-alpha.5"
 
 
 def _install_evo_cli(sandbox, pypi_version: str):

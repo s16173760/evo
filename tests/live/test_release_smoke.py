@@ -798,11 +798,20 @@ def test_claude_code(sandbox):
     # drops. The leading `claude plugin marketplace add` + `plugin install`
     # are kept as a redundant-but-still-valid manual path that we want to
     # keep working alongside `evo install`.
-    evo_install_cc_args = (
-        "--from-path /tmp/evo-local-repo"
-        if sandbox.marketplace_source.startswith("/")
-        else ""
-    )
+    #
+    # Pass --version so `evo install`'s internal marketplace add matches
+    # the tag we added manually above. Without the pin, evo would add the
+    # default-branch URL, claude refreshes its clone to main, and the
+    # plugin cache version drifts from the version on disk — binary fetch
+    # then targets the wrong cache_dir / version mismatch.
+    import os as _os
+    smoke_version = _os.environ.get("EVO_RELEASE_SMOKE_VERSION", "").strip()
+    if sandbox.marketplace_source.startswith("/"):
+        evo_install_cc_args = "--from-path /tmp/evo-local-repo"
+    elif smoke_version:
+        evo_install_cc_args = f"--version {smoke_version}"
+    else:
+        evo_install_cc_args = ""
     _drive_smoke(
         sandbox,
         host="claude-code",
