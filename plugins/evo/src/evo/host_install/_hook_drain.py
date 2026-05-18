@@ -53,10 +53,6 @@ def _target_name() -> str | None:
     else:
         return None
 
-    if system == "windows" and arch == "arm64":
-        # Not built in CI yet — windows-arm64 runners are still in preview.
-        return None
-
     return f"{system}-{arch}"
 
 

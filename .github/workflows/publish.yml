@@ -266,9 +266,14 @@ jobs:
       - name: Wait for evo-hq-cli to be queryable on PyPI
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          echo "Polling PyPI for evo-hq-cli==$VERSION (publish job just finished)..."
+          # PyPI normalises 0.4.1-alpha.4 -> 0.4.1a4 (PEP-440). Grep for
+          # either form so the poll matches either way.
+          PEP440=$(echo "$VERSION" \
+            | sed -E 's/-alpha\./a/; s/-beta\./b/; s/-rc\./rc/')
+          echo "Polling PyPI for evo-hq-cli==$VERSION (PEP-440: $PEP440)..."
           for i in $(seq 1 30); do
-            if pip index versions evo-hq-cli 2>/dev/null | grep -q "$VERSION"; then
+            if pip index versions evo-hq-cli 2>/dev/null \
+                 | grep -qE "(${VERSION//./\\.}|${PEP440//./\\.})"; then
               echo "Found evo-hq-cli==$VERSION on PyPI"
               break
             fi
@@ -352,6 +357,10 @@ jobs:
           - runner: windows-latest
             os: windows
             arch: amd64
+            ext: ".exe"
+          - runner: windows-11-arm
+            os: windows
+            arch: arm64
             ext: ".exe"
     runs-on: ${{ matrix.runner }}
     steps:
