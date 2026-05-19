@@ -18,10 +18,6 @@
     "extensions": ["./extensions"],
     "skills": ["./skills"]
   },
-  "dependencies": {
-    "pi-subagents": "*"
-  },
-  "bundledDependencies": ["pi-subagents"],
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "pi-agent-core": "*",

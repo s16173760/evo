@@ -34,6 +34,19 @@ from pathlib import Path
 _NPM_PACKAGE = "@evo-hq/pi-evo"
 _LEGACY_SKILL_DIRS = ("evo-discover", "evo-optimize", "evo-subagent", "evo-infra-setup")
 
+# Pi extensions that register a parallel-subagent tool. If none is
+# present after the main install, `evo install pi` auto-installs
+# `pi-subagents` (the default option). bundledDependencies in @evo-hq/pi-evo
+# can't reliably ship pi-subagents — CI doesn't `npm install` before
+# `npm publish` so the bundle ends up empty in the tarball.
+_KNOWN_SUBAGENT_PROVIDERS = (
+    "pi-subagents",
+    "pi-crew",
+    "taskplane",
+    "pi-collaborating-agents",
+)
+_DEFAULT_SUBAGENT_PROVIDER = "pi-subagents"
+
 
 def _pi_base() -> Path:
     home_override = os.environ.get("PI_HOME")
@@ -51,6 +64,59 @@ def _legacy_extension_path() -> Path:
 
 def _legacy_skills_dir() -> Path:
     return _pi_base() / "agent" / "skills"
+
+
+def _find_subagent_provider() -> str | None:
+    """Return the name of an installed parallel-subagent provider, or None.
+
+    Looks in settings.json#packages[] for any of the known providers.
+    Used both for the install gate (`_ensure_subagent_provider`) and
+    by doctor.
+    """
+    settings = _pi_settings_file()
+    if not settings.exists():
+        return None
+    try:
+        data = json.loads(settings.read_text())
+    except json.JSONDecodeError:
+        return None
+    blob = " ".join(str(p) for p in data.get("packages", []) or [])
+    for name in _KNOWN_SUBAGENT_PROVIDERS:
+        if name in blob:
+            return name
+    return None
+
+
+def _ensure_subagent_provider() -> None:
+    """Install `pi-subagents` if no parallel-subagent provider is present.
+
+    Pi's default toolkit has no fanout primitive. @evo-hq/pi-evo declares
+    pi-subagents as a dep but can't reliably ship it as a bundle (CI
+    doesn't `npm install` before `npm publish`). So we install it
+    explicitly here. Idempotent: if any known provider already exists,
+    no-op.
+    """
+    existing = _find_subagent_provider()
+    if existing:
+        print(f"✓ subagent provider already installed: {existing}")
+        return
+
+    pi_bin = shutil.which("pi")
+    if pi_bin is None:
+        # _pi_bin_or_error caught this in install(); this path only
+        # reached via direct unit-style invocation.
+        return
+
+    print(f"installing {_DEFAULT_SUBAGENT_PROVIDER} (registers the `subagent` "
+          f"tool for parallel rounds)...")
+    cmd = [pi_bin, "install", f"npm:{_DEFAULT_SUBAGENT_PROVIDER}"]
+    print(f"$ {' '.join(cmd)}")
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        print(f"WARNING: `pi install npm:{_DEFAULT_SUBAGENT_PROVIDER}` failed "
+              f"(rc={rc}); optimize will degrade to sequential execution.\n"
+              f"  Retry manually: pi install npm:{_DEFAULT_SUBAGENT_PROVIDER}",
+              file=sys.stderr)
 
 
 def _pi_bin_or_error() -> str | None:
@@ -140,6 +206,9 @@ def install(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
 
+    print("\nEnsuring a parallel-subagent provider is installed ...")
+    _ensure_subagent_provider()
+
     print(
         f"\n✓ {_NPM_PACKAGE} installed via pi.\n"
         "  Restart any running pi session to load the extension and skills."
@@ -209,13 +278,16 @@ def doctor(args: argparse.Namespace) -> int:
         print("  Run: evo install pi")
         rc = 1
 
-    has_subagents = any("pi-subagents" in p for p in packages)
-    if has_subagents:
-        print("✓ pi-subagents installed (parallel-subagent provider)")
+    # pi-subagents is installed explicitly (not as a bundled dep — the
+    # bundle is empty in the published tarball because CI doesn't
+    # `npm install` before `npm publish`). It should appear in packages[]
+    # after a successful `evo install pi`.
+    provider = _find_subagent_provider()
+    if provider:
+        print(f"✓ subagent provider installed: {provider}")
     else:
-        # `@evo-hq/pi-evo` bundles pi-subagents as a dependency, so this
-        # should be present after a successful install. Flag if missing.
-        print("✗ pi-subagents not detected — `@evo-hq/pi-evo` should bundle it")
+        print(f"✗ no parallel-subagent provider installed")
+        print(f"  Run: pi install npm:{_DEFAULT_SUBAGENT_PROVIDER}")
         rc = 1
 
     # Warn (don't fail) if legacy artifacts remain — install/update auto-sweeps.
