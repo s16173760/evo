@@ -28,6 +28,7 @@ SUPPORTED_HOSTS = frozenset({
     "opencode",
     "openclaw",
     "hermes",
+    "pi",
     "generic",
 })
 

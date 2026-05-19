@@ -1068,3 +1068,84 @@ def test_openclaw(sandbox_4g):
         ),
         env_keys={"ANTHROPIC_API_KEY": anthropic_key},
     )
+
+
+def test_pi(sandbox):
+    """Pi (pi.dev, @earendil-works/pi-coding-agent): npm install +
+    `evo install pi`. Driver: ``pi -p <prompt> --provider anthropic
+    --model claude-sonnet-4-5``.
+
+    Pi 0.75.3 is the upstream agent SDK that openclaw embeds, so the
+    bundled extension at ``evo/openclaw_plugin/evo.bundle.js`` loads
+    cleanly on pi (verified by trials/pi-probe — `before_provider_request`
+    still fires). ``evo install pi`` drops that same JS into
+    ``~/.pi/agent/extensions/evo/index.js`` and copies the four evo
+    skills under ``~/.pi/agent/skills/evo-*/``.
+
+    Model: claude-sonnet-4-5 mirrors test_openclaw — gpt-4o-mini didn't
+    complete the optimize loop in 15 min (bundle loaded + session
+    registered, but agent stayed in interruptible-sleep without
+    committing any experiment).
+
+    Pi requires Node ≥21 (``webidl.util.markAsUncloneable`` is a v21
+    addition; v20 throws on startup). The default e2b template ships
+    Node 20 at /usr/local/bin/node; we install Node 22 via apt and
+    shadow the pre-installed binary.
+    """
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not anthropic_key:
+        pytest.skip("ANTHROPIC_API_KEY required for pi")
+
+    sudo = sandbox._sudo
+    sandbox.run(
+        f"curl -fsSL https://deb.nodesource.com/setup_22.x | {sudo}bash - "
+        "> /tmp/node-setup.log 2>&1",
+        timeout=120,
+    )
+    sandbox.run(f"{sudo}apt-get install -y nodejs >/dev/null", timeout=180)
+    # The e2b base image ships node 20.9 at /usr/local/bin/node which
+    # takes PATH precedence over the apt-installed /usr/bin/node. Shadow
+    # so v22 wins; pi crashes on v20 with `webidl.util.markAsUncloneable`.
+    sandbox.run(
+        f"{sudo}rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx && "
+        f"{sudo}ln -s /usr/bin/node /usr/local/bin/node && "
+        f"{sudo}ln -s /usr/bin/npm /usr/local/bin/npm && "
+        f"{sudo}ln -s /usr/bin/npx /usr/local/bin/npx && "
+        "node --version",
+        timeout=30,
+    )
+    sandbox.run(
+        f"{sudo}npm install -g @earendil-works/pi-coding-agent "
+        "> /tmp/pi-install.log 2>&1",
+        timeout=600,
+    )
+    sandbox.run("pi --version")
+
+    prompt = _shell_quote(_read_prompt())
+    # In local-source mode the harness uploads the repo tarball to
+    # /tmp/evo-local-repo; pass --from-path so the install picks up
+    # skills from there (the installed wheel doesn't ship them — same
+    # situation as hermes/opencode).
+    if sandbox.marketplace_source.startswith("/"):
+        evo_install_pi_args = "--from-path /tmp/evo-local-repo"
+    else:
+        evo_install_pi_args = ""
+    _drive_smoke(
+        sandbox,
+        host="pi",
+        install_steps=[
+            f"export PATH=$HOME/.local/bin:$PATH; evo install pi {evo_install_pi_args}",
+        ],
+        drive_cmd=(
+            "export PATH=$HOME/.local/bin:$PATH; "
+            # _drive_smoke wraps this with `cd /tmp/ws &&`, so the
+            # extension's findEvoRunDir() walks up from the workspace
+            # and finds .evo/. `pi -p` exits after the response (one
+            # multi-turn session). Tools enabled by default so the
+            # agent can invoke bash/edit/etc. to drive `evo new`/`evo run`.
+            "nohup pi -p "
+            f"{prompt} --provider anthropic --model claude-sonnet-4-5 "
+            "> /tmp/agent.log 2>&1 & echo $! > /tmp/agent.pid"
+        ),
+        env_keys={"ANTHROPIC_API_KEY": anthropic_key},
+    )

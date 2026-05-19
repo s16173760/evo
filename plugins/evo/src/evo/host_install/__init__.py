@@ -14,7 +14,7 @@ See notes/cross-host-inject-design.md.
 
 from __future__ import annotations
 
-from . import claude_code, codex, hermes, opencode, openclaw
+from . import claude_code, codex, hermes, opencode, openclaw, pi
 
 ADAPTERS = {
     "claude-code": claude_code,
@@ -22,6 +22,7 @@ ADAPTERS = {
     "hermes": hermes,
     "opencode": opencode,
     "openclaw": openclaw,
+    "pi": pi,
 }
 
 # Single source of truth for host names. CLI argparse choices and
