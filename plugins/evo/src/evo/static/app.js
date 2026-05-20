@@ -1826,6 +1826,17 @@ const EXT_LANG = {
   jl: 'julia', ps1: 'powershell', psm1: 'powershell',
   groovy: 'groovy', gradle: 'groovy', cmake: 'cmake', proto: 'protobuf',
   nim: 'nim', ml: 'ocaml', mli: 'ocaml', fs: 'fsharp', fsx: 'fsharp', fsi: 'fsharp',
+  // Not vendored — fetched on demand via ensureLanguage() the first time a
+  // file of this type appears (graceful no-op if the grammar isn't published).
+  d: 'd', cr: 'crystal', nix: 'nix', vala: 'vala', tcl: 'tcl',
+  f90: 'fortran', f95: 'fortran', f03: 'fortran', for: 'fortran',
+  pas: 'delphi', dpr: 'delphi', vhd: 'vhdl', vhdl: 'vhdl', sv: 'verilog', svh: 'verilog',
+  scm: 'scheme', ss: 'scheme', lisp: 'lisp', cl: 'lisp', el: 'lisp',
+  adb: 'ada', ads: 'ada', tex: 'latex', sty: 'latex',
+  awk: 'awk', vim: 'vim', coffee: 'coffeescript', styl: 'stylus',
+  pug: 'pug', jade: 'pug', hbs: 'handlebars', twig: 'twig',
+  properties: 'properties', pgsql: 'pgsql', asm: 'x86asm',
+  nginx: 'nginx', prolog: 'prolog', hx: 'haxe', elm: 'elm', purs: 'purescript',
 };
 
 // Some languages key off the filename, not an extension.
@@ -1848,11 +1859,46 @@ function langForPath(path) {
 // imperfectly, same trade-off most diff viewers make.)
 function highlightCode(code, lang) {
   if (!code) return '';
-  if (window.hljs && lang) {
+  if (window.hljs && lang && window.hljs.getLanguage(lang)) {
     try { return window.hljs.highlight(code, { language: lang, ignoreIllegals: true }).value; }
     catch (_) { /* fall through to plain */ }
   }
   return esc(code);
+}
+
+// Grammars not in the vendored bundles are fetched on demand from the
+// highlight.js CDN (pinned to the core's version). Common languages stay
+// offline; only the long tail needs the network, and a failed/blocked fetch
+// degrades to plain text. State: 'loading' | 'done' | 'failed'.
+const HLJS_VERSION = '11.9.0';
+const HLJS_LANG_BASE = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HLJS_VERSION}/languages/`;
+const _grammarState = {};
+
+function ensureLanguage(lang, onReady) {
+  if (!window.hljs || !lang || window.hljs.getLanguage(lang)) return;
+  if (_grammarState[lang]) return; // loading / done / failed — don't refetch
+  _grammarState[lang] = 'loading';
+  const s = document.createElement('script');
+  s.src = HLJS_LANG_BASE + lang + '.min.js';
+  s.async = true;
+  s.onload = () => {
+    _grammarState[lang] = window.hljs.getLanguage(lang) ? 'done' : 'failed';
+    if (_grammarState[lang] === 'done' && onReady) onReady();
+  };
+  s.onerror = () => { _grammarState[lang] = 'failed'; };
+  document.head.appendChild(s);
+}
+
+// Coalesce re-renders when several grammars finish loading at once.
+let _diffRerenderTimer = null;
+function scheduleDiffRerender() {
+  if (state.sidebarTab !== 'diff' || !state.selectedNode) return;
+  clearTimeout(_diffRerenderTimer);
+  _diffRerenderTimer = setTimeout(() => {
+    if (state.sidebarTab === 'diff' && state.selectedNode) {
+      openDrawer(state.selectedNode, { fromHistory: true });
+    }
+  }, 80);
 }
 
 // Parse a unified git diff into per-file structures.
@@ -1947,6 +1993,11 @@ function renderDiffFiles(text, mode) {
   }
   return files.map((f) => {
     const lang = langForPath(f.path);
+    // Lazy-load the grammar if it's mapped but not yet registered; re-render
+    // the diff once it arrives so highlighting applies.
+    if (lang && window.hljs && !window.hljs.getLanguage(lang)) {
+      ensureLanguage(lang, scheduleDiffRerender);
+    }
     const stat = `<span class="diff-stat"><span class="diff-stat-add">+${f.adds}</span> <span class="diff-stat-del">−${f.dels}</span></span>`;
     const body = f.hunks.map((h) => {
       if (mode === 'split') {
