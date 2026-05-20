@@ -1806,6 +1806,41 @@ function setDiffView(mode) {
   if (state.selectedNode) openDrawer(state.selectedNode, { fromHistory: true });
 }
 
+// File extension → highlight.js language id. Unknown extensions skip
+// highlighting (rendered as plain escaped text).
+const EXT_LANG = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
+  c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+  cs: 'csharp', php: 'php', swift: 'swift', kt: 'kotlin', scala: 'scala',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  html: 'xml', htm: 'xml', xml: 'xml', vue: 'xml', svg: 'xml',
+  css: 'css', scss: 'scss', less: 'less',
+  json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
+  md: 'markdown', sql: 'sql', r: 'r', lua: 'lua', pl: 'perl',
+};
+
+function langForPath(path) {
+  if (!path) return null;
+  const base = path.split('/').pop();
+  const ext = base.includes('.') ? base.split('.').pop().toLowerCase() : '';
+  return EXT_LANG[ext] || null;
+}
+
+// Highlight one line of code, returning HTML. Falls back to escaped plain
+// text when highlight.js is unavailable or the language is unknown.
+// (Per-line highlighting — multi-line tokens like block comments may render
+// imperfectly, same trade-off most diff viewers make.)
+function highlightCode(code, lang) {
+  if (!code) return '';
+  if (window.hljs && lang) {
+    try { return window.hljs.highlight(code, { language: lang, ignoreIllegals: true }).value; }
+    catch (_) { /* fall through to plain */ }
+  }
+  return esc(code);
+}
+
 // Parse a unified git diff into per-file structures.
 function parseUnifiedDiff(text) {
   const files = [];
@@ -1875,11 +1910,11 @@ function hunkUnifiedRows(hunk) {
   const rows = [];
   let oldNo = hunk.oldNo, newNo = hunk.newNo;
   for (const l of hunk.lines) {
-    const tag = l[0], txt = l.slice(1);
+    const tag = l[0], code = l.slice(1);
     if (tag === '\\') continue;
-    if (tag === '+') rows.push({ type: 'add', oldNo: '', newNo: newNo++, text: '+' + txt });
-    else if (tag === '-') rows.push({ type: 'del', oldNo: oldNo++, newNo: '', text: '-' + txt });
-    else rows.push({ type: 'ctx', oldNo: oldNo++, newNo: newNo++, text: ' ' + txt });
+    if (tag === '+') rows.push({ type: 'add', sign: '+', oldNo: '', newNo: newNo++, code });
+    else if (tag === '-') rows.push({ type: 'del', sign: '-', oldNo: oldNo++, newNo: '', code });
+    else rows.push({ type: 'ctx', sign: ' ', oldNo: oldNo++, newNo: newNo++, code });
   }
   return rows;
 }
@@ -1897,21 +1932,22 @@ function renderDiffFiles(text, mode) {
     return `<div class="diff-block">${raw}</div>`;
   }
   return files.map((f) => {
+    const lang = langForPath(f.path);
     const stat = `<span class="diff-stat"><span class="diff-stat-add">+${f.adds}</span> <span class="diff-stat-del">−${f.dels}</span></span>`;
     const body = f.hunks.map((h) => {
       if (mode === 'split') {
         const rows = hunkSplitRows(h).map((r) => `<tr>
             <td class="diff-gutter">${r.leftNo ?? ''}</td>
-            <td class="diff-cell ${r.leftType}">${esc(r.left)}</td>
+            <td class="diff-cell ${r.leftType}">${highlightCode(r.left, lang)}</td>
             <td class="diff-gutter diff-gutter-r">${r.rightNo ?? ''}</td>
-            <td class="diff-cell ${r.rightType}">${esc(r.right)}</td>
+            <td class="diff-cell ${r.rightType}">${highlightCode(r.right, lang)}</td>
           </tr>`).join('');
         return `<div class="diff-hunk-head">${esc(h.header)}</div><table class="diff-table split"><tbody>${rows}</tbody></table>`;
       }
       const rows = hunkUnifiedRows(h).map((r) => `<tr>
           <td class="diff-gutter">${r.oldNo}</td>
           <td class="diff-gutter">${r.newNo}</td>
-          <td class="diff-cell ${r.type}">${esc(r.text)}</td>
+          <td class="diff-cell ${r.type}"><span class="diff-sign">${r.sign}</span>${highlightCode(r.code, lang)}</td>
         </tr>`).join('');
       return `<div class="diff-hunk-head">${esc(h.header)}</div><table class="diff-table unified"><tbody>${rows}</tbody></table>`;
     }).join('');

@@ -1673,6 +1673,17 @@ body {
 .diff-cell.add { background: rgba(34,197,94,0.12); color: var(--text-1); }
 .diff-cell.del { background: rgba(239,68,68,0.12); color: var(--text-1); }
 .diff-cell.empty { background: rgba(255,255,255,0.015); }
+.diff-sign {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 4px;
+  color: var(--text-4);
+  user-select: none;
+}
+/* Highlight.js tokens set their own foreground; keep their background clear
+   so the line-level add/del tint shows through. */
+.diff-cell .hljs,
+.diff-cell code { background: transparent; }
 
 .task-row {
   display: flex;
