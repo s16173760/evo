@@ -1819,11 +1819,25 @@ const EXT_LANG = {
   css: 'css', scss: 'scss', less: 'less',
   json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini', ini: 'ini',
   md: 'markdown', sql: 'sql', r: 'r', lua: 'lua', pl: 'perl',
+  // Loaded from highlight-langs-extra.min.js:
+  dockerfile: 'dockerfile', dart: 'dart', ex: 'elixir', exs: 'elixir',
+  erl: 'erlang', hrl: 'erlang', hs: 'haskell',
+  clj: 'clojure', cljs: 'clojure', cljc: 'clojure', edn: 'clojure',
+  jl: 'julia', ps1: 'powershell', psm1: 'powershell',
+  groovy: 'groovy', gradle: 'groovy', cmake: 'cmake', proto: 'protobuf',
+  nim: 'nim', ml: 'ocaml', mli: 'ocaml', fs: 'fsharp', fsx: 'fsharp', fsi: 'fsharp',
+};
+
+// Some languages key off the filename, not an extension.
+const NAME_LANG = {
+  dockerfile: 'dockerfile', 'cmakelists.txt': 'cmake',
 };
 
 function langForPath(path) {
   if (!path) return null;
   const base = path.split('/').pop();
+  const lower = base.toLowerCase();
+  if (NAME_LANG[lower]) return NAME_LANG[lower];
   const ext = base.includes('.') ? base.split('.').pop().toLowerCase() : '';
   return EXT_LANG[ext] || null;
 }
