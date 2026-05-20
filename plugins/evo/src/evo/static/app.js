@@ -1813,6 +1813,12 @@ async function openDrawer(expId, opts) {
   const content = document.getElementById('sidebar-content');
   if (!sidebar || !content) return;
   sidebar.classList.remove('hidden');
+  // Restore a previously dragged side-panel width (ignored in center mode,
+  // where .peek-center fixes the width).
+  try {
+    const savedW = localStorage.getItem('evo.sidebarWidth');
+    if (savedW) sidebar.style.setProperty('--evo-sidebar-w', savedW);
+  } catch (_) { /* ignore */ }
   applyDetailMode();
   // Reflect selection in scatter + timeline only on a real selection change.
   // Tab switches inside the drawer re-enter openDrawer with the same id —
@@ -1840,6 +1846,8 @@ async function openDrawer(expId, opts) {
   const activeTab = ['summary', 'diff', 'tasks'].includes(state.sidebarTab)
     ? state.sidebarTab
     : 'summary';
+  // Drives the diff-tab fill layout in CSS (.sidebar[data-tab="diff"]).
+  sidebar.dataset.tab = activeTab;
   const isPrunable = node.status === 'committed' || node.status === 'evaluated';
   const canBack = state.drawerHistoryIndex > 0;
   const canForward = state.drawerHistoryIndex < state.drawerHistory.length - 1;
@@ -2089,6 +2097,32 @@ function applyDetailMode() {
   sidebar.classList.toggle('peek-center', center);
   const open = !sidebar.classList.contains('hidden');
   if (backdrop) backdrop.classList.toggle('hidden', !(center && open));
+}
+
+// Drag the left edge of the side panel to resize it. No-op in center mode.
+function startSidebarResize(e) {
+  e.preventDefault();
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar || state.detailMode === 'center') return;
+  const handle = e.currentTarget;
+  handle.classList.add('dragging');
+  document.body.style.userSelect = 'none';
+  const minW = 380;
+  const maxW = Math.min(1100, Math.round(window.innerWidth * 0.8));
+  const onMove = (ev) => {
+    const w = Math.max(minW, Math.min(maxW, window.innerWidth - ev.clientX));
+    sidebar.style.setProperty('--evo-sidebar-w', w + 'px');
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    handle.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    const w = sidebar.style.getPropertyValue('--evo-sidebar-w');
+    if (w) { try { localStorage.setItem('evo.sidebarWidth', w.trim()); } catch (_) { /* ignore */ } }
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
 }
 
 function toggleDetailMode(e) {

@@ -1109,16 +1109,70 @@ body {
 
 /* ─── Docked sidebar (opens on node selection) ──────────── */
 .sidebar {
-  width: 575px;
+  width: var(--evo-sidebar-w, 575px);
   flex-shrink: 0;
   background: var(--bg-panel);
   border-left: 1px solid var(--border-subtle);
-  overflow-y: auto;
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
+/* The content area is the scroll container; .sidebar itself stays put so the
+   resize handle (its absolute child) doesn't scroll away. */
+#sidebar-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
 .sidebar.hidden { display: none; }
+
+/* Drag-to-resize handle on the panel's left edge (side mode only). */
+.sidebar-resize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+.sidebar-resize::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.sidebar-resize:hover::before,
+.sidebar-resize.dragging::before { background: var(--accent, #e8843c); }
+/* No edge-resize in center peek — width is fixed there. */
+.sidebar.peek-center .sidebar-resize { display: none; }
+
+/* Diff tab: let the diff block fill the panel instead of capping at a fixed
+   height with empty space below it. */
+.sidebar[data-tab="diff"] #sidebar-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar[data-tab="diff"] .drawer-header,
+.sidebar[data-tab="diff"] .drawer-tabs { flex-shrink: 0; }
+.sidebar[data-tab="diff"] .drawer-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar[data-tab="diff"] .diff-block {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
 
 /* Center-peek (Notion-style): lift the panel out of the right rail into a
    centered modal over a dimmed backdrop. The tree fills the width behind it. */
