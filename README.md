@@ -31,7 +31,6 @@ You give it a codebase. It discovers metrics to optimize, sets up the evaluation
 
 Runs on Claude Code, Codex, OpenClaw, Hermes, Opencode, or Pi. Experiments run locally or on remote sandboxes — Modal, E2B, Daytona, AWS, Azure, SSH.
 
-Runs until you stop it.
 
 <p align="center">
   <img src="assets/dashboard.png" alt="evo dashboard" width="100%" />
