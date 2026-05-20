@@ -1134,7 +1134,7 @@ body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: min(760px, 92vw);
+  width: min(960px, 94vw);
   height: min(82vh, 880px);
   border: 1px solid var(--border);
   border-left: 1px solid var(--border);
