@@ -38,14 +38,17 @@ from pathlib import Path
 _RELEASE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([.\-+a-zA-Z0-9]*)$")
 
 # Events evo wires in the IDE:
-#   - sessionStart: registers the session (no delivery — the IDE drops
-#     additional_context, so there's no point draining here).
+#   - sessionStart / beforeSubmitPrompt: REGISTER the session (no delivery).
+#     sessionStart only fires for new chats; beforeSubmitPrompt fires on every
+#     prompt, so it registers resumed chats too (where sessionStart never
+#     fires) — without it, a resumed chat stays unregistered and `evo direct`
+#     can't reach it.
 #   - stop: fires at the end of each agent turn and returns followup_message,
-#     which the IDE auto-submits as a visible new message. This is the only
-#     channel that actually reaches the chat.
-# postToolUse/beforeSubmitPrompt are not wired: their only output
-# (additional_context) is silently dropped by Cursor's IDE agent.
-_INJECT_EVENTS = ("sessionStart", "stop")
+#     which the IDE auto-submits as a visible new message — the only channel
+#     that actually reaches the chat.
+# postToolUse is not wired: its only output (additional_context) is silently
+# dropped by Cursor's IDE agent.
+_INJECT_EVENTS = ("sessionStart", "beforeSubmitPrompt", "stop")
 
 
 def _cursor_base() -> Path:

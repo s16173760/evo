@@ -63,10 +63,10 @@ def _drain_debug(**fields) -> None:
 HOST_HOOK_EVENT_NAMES = {
     "claude-code": ("PreToolUse", "UserPromptSubmit", "SessionStart", "PostToolUse"),
     "codex": ("PreToolUse", "UserPromptSubmit", "SessionStart", "PostToolUse"),
-    # Cursor: sessionStart only registers; the IDE drops additional_context,
-    # so directives are delivered on stop via followup_message (auto-submitted
-    # as a visible message).
-    "cursor": ("sessionStart", "stop"),
+    # Cursor: sessionStart + beforeSubmitPrompt register the session (the IDE
+    # drops additional_context); directives are delivered on stop via
+    # followup_message (auto-submitted as a visible message).
+    "cursor": ("sessionStart", "beforeSubmitPrompt", "stop"),
 }
 
 
@@ -135,30 +135,36 @@ def _resolve_root_from_payload(payload: dict) -> Path | None:
     return None
 
 
+_DELIVER_EVENTS = ("stop", "subagentStop")
+
+
 def _self_contained_gate(
     root: Path, session_id: str, host: str, hook_event: str | None
 ) -> bool:
-    """Replicate the Rust hot-path's gate for hosts wired directly to
-    `evo-drain` (no `evo-hook-drain` binary in front). Returns True when the
-    caller should proceed to drain.
+    """Gate for hosts wired directly to `evo-drain` (no `evo-hook-drain`
+    binary in front). Returns True when the caller should proceed to drain.
 
-    On a session-start event: register the session and seed its offset to the
-    current queue tail, then return False — DON'T drain. On Cursor the only
-    output sessionStart can return (additional_context) is silently dropped by
-    the IDE, so draining here would just consume directives (advance the
-    offset, clear the marker) before the stop hook could deliver them. Seeding
-    the offset also avoids replaying directives queued before this session.
+    Registers the session on the FIRST event of any kind, seeding its offset
+    to the current queue tail. `sessionStart` only fires for brand-new chats —
+    a *resumed* Cursor chat never fires it, so registration must also happen on
+    the other wired events (beforeSubmitPrompt, stop); otherwise the session
+    stays unregistered and `evo direct` can never reach it. Seeding the offset
+    avoids replaying directives queued before this session existed.
 
-    For other events (e.g. stop): require both a registered session and a
-    marker file, then drain.
+    Only `stop`/`subagentStop` can actually deliver in Cursor (via
+    followup_message); every other event is register-only. The IDE drops
+    `additional_context`, so there's nothing to deliver on sessionStart/
+    beforeSubmitPrompt — and draining there would just consume directives
+    before the stop hook could deliver them.
     """
-    if hook_event in _SESSION_START_EVENTS:
-        if not session_file(root, session_id).exists():
-            register_session(root, session_id, host)
-            queue.init_offset_to_latest(root, session_id)
-        return False
-    if not session_file(root, session_id).exists():
-        return False
+    fresh = not session_file(root, session_id).exists()
+    if fresh:
+        register_session(root, session_id, host)
+        queue.init_offset_to_latest(root, session_id)
+    if hook_event not in _DELIVER_EVENTS:
+        return False  # register-only (sessionStart, beforeSubmitPrompt, …)
+    if fresh:
+        return False  # just registered on this stop; nothing marked yet
     return marker.exists(root, session_id)
 
 

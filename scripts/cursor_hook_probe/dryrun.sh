@@ -49,9 +49,11 @@ PY
 HOOKS="$CURSOR_HOME/hooks.json"
 grep -q '"afterFileEdit"' "$HOOKS" || die "clobbered the user's existing hook"
 pass "preserved user's afterFileEdit hook"
-grep -q '"sessionStart"' "$HOOKS" && grep -q '"stop"' "$HOOKS" || die "did not wire inject events"
+for ev in sessionStart beforeSubmitPrompt stop; do
+  grep -q "\"$ev\"" "$HOOKS" || die "did not wire inject event: $ev"
+done
 grep -q 'evo-drain --host cursor' "$HOOKS" || die "drain command not written"
-pass "wired sessionStart + stop -> evo-drain --host cursor"
+pass "wired sessionStart + beforeSubmitPrompt + stop -> evo-drain --host cursor"
 
 # Idempotence: writing twice must not duplicate evo entries.
 $PY - <<PY
@@ -61,12 +63,12 @@ PY
 COUNT=$($PY - <<PY
 import json,os
 d=json.load(open(os.path.join(os.environ["CURSOR_HOME"],"hooks.json")))
-n=sum("evo-drain" in str(e.get("command","")) for ev in ("sessionStart","stop") for e in d["hooks"].get(ev,[]))
+n=sum("evo-drain" in str(e.get("command","")) for ev in ("sessionStart","beforeSubmitPrompt","stop") for e in d["hooks"].get(ev,[]))
 print(n)
 PY
 )
-[ "$COUNT" = "2" ] || die "expected 2 evo entries after re-run, got $COUNT (not idempotent)"
-pass "idempotent re-run (2 evo entries, no dupes)"
+[ "$COUNT" = "3" ] || die "expected 3 evo entries after re-run, got $COUNT (not idempotent)"
+pass "idempotent re-run (3 evo entries, no dupes)"
 
 DOC_OUT="$($EVO doctor cursor 2>&1 || true)"
 echo "$DOC_OUT" | grep -q "inject hooks wired" || die "doctor did not confirm wired hooks"
